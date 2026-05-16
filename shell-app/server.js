@@ -5,10 +5,31 @@ const crypto = require('node:crypto');
 const express = require('express');
 const { getEdgeAgentService } = require('./edgeAgentService');
 
+const LOG_LEVELS = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+function createLogger(rawLevel) {
+  const levelName = String(rawLevel || 'info').toLowerCase();
+  const threshold = LOG_LEVELS[levelName] || LOG_LEVELS.info;
+  const shouldLog = (level) => LOG_LEVELS[level] >= threshold;
+  return {
+    debug: (...args) => shouldLog('debug') && console.debug('[shell-app]', ...args),
+    info: (...args) => shouldLog('info') && console.log('[shell-app]', ...args),
+    warn: (...args) => shouldLog('warn') && console.warn('[shell-app]', ...args),
+    error: (...args) => shouldLog('error') && console.error('[shell-app]', ...args),
+    level: levelName,
+  };
+}
+
 const app = express();
 const service = getEdgeAgentService();
 const port = Number(process.env.EDGE_SHELL_PORT || 3000);
 const publicDir = path.join(__dirname, 'public');
+const logger = createLogger(process.env.EDGE_LOG_LEVEL);
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(publicDir));
@@ -187,5 +208,5 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`[shell-app] listening on http://127.0.0.1:${port}`);
+  logger.info(`listening on http://127.0.0.1:${port} (log level: ${logger.level})`);
 });

@@ -7,6 +7,26 @@ const express = require('express');
 const { WorkerPool } = require('./ipc');
 const { registerInferRoutes } = require('./routes/infer');
 
+const LOG_LEVELS = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+function createLogger(rawLevel) {
+  const levelName = String(rawLevel || 'info').toLowerCase();
+  const threshold = LOG_LEVELS[levelName] || LOG_LEVELS.info;
+  const shouldLog = (level) => LOG_LEVELS[level] >= threshold;
+  return {
+    debug: (...args) => shouldLog('debug') && console.debug('[api-server]', ...args),
+    info: (...args) => shouldLog('info') && console.log('[api-server]', ...args),
+    warn: (...args) => shouldLog('warn') && console.warn('[api-server]', ...args),
+    error: (...args) => shouldLog('error') && console.error('[api-server]', ...args),
+    level: levelName,
+  };
+}
+
 function parseArgs(argv) {
   const options = {};
   for (let i = 2; i < argv.length; i += 1) {
@@ -40,13 +60,13 @@ function parseSupervisorMessage(data) {
   }
 }
 
-function startSupervisorIpcListener(socketPath, workerPool) {
+function startSupervisorIpcListener(socketPath, workerPool, logger) {
   try {
     if (fs.existsSync(socketPath)) {
       fs.unlinkSync(socketPath);
     }
   } catch (err) {
-    console.error(`[api-server] failed to unlink existing socket ${socketPath}:`, err.message);
+    logger.error(`failed to unlink existing socket ${socketPath}:`, err.message);
   }
 
   const server = net.createServer((socket) => {
@@ -72,11 +92,11 @@ function startSupervisorIpcListener(socketPath, workerPool) {
   });
 
   server.on('error', (err) => {
-    console.error('[api-server] supervisor IPC listener error:', err.message);
+    logger.error('supervisor IPC listener error:', err.message);
   });
 
   server.listen(socketPath, () => {
-    console.log(`[api-server] supervisor notify listener on ${socketPath}`);
+    logger.info(`supervisor notify listener on ${socketPath}`);
   });
 
   const cleanup = () => {
@@ -102,6 +122,7 @@ const workerCount = Number(process.env.EDGE_WORKER_COUNT || 2);
 const workerSocketPrefix = process.env.EDGE_WORKER_SOCKET_PREFIX || '/tmp/edge-worker-';
 const supervisorSocketPath =
   args['supervisor-socket'] || process.env.EDGE_API_NOTIFY_SOCK || '/tmp/edge-api-notify.sock';
+const logger = createLogger(process.env.EDGE_LOG_LEVEL);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -123,12 +144,12 @@ app.get('/health', (_req, res) => {
 });
 
 app.use((err, _req, res, _next) => {
-  console.error('[api-server] unhandled route error:', err);
+  logger.error('unhandled route error:', err);
   res.status(500).json({ error: 'internal_error' });
 });
 
-startSupervisorIpcListener(path.resolve(supervisorSocketPath), workerPool);
+startSupervisorIpcListener(path.resolve(supervisorSocketPath), workerPool, logger);
 
 app.listen(port, '127.0.0.1', () => {
-  console.log(`[api-server] listening on http://127.0.0.1:${port}`);
+  logger.info(`listening on http://127.0.0.1:${port} (log level: ${logger.level})`);
 });

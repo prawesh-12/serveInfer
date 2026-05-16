@@ -11,6 +11,7 @@ help:
 	@echo "  make restart - Stop then run"
 
 run:
+	@bash scripts/stop.sh
 	@bash scripts/build.sh
 	@bash scripts/start.sh
 

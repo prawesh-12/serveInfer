@@ -21,6 +21,9 @@
 #include <utility>
 
 namespace {
+constexpr int kCircuitKeyModelCache = -1001;
+constexpr int kCircuitKeyApiServer = -1002;
+
 std::string nowEpochSeconds() {
   using Clock = std::chrono::system_clock;
   const auto now = Clock::now().time_since_epoch();
@@ -340,6 +343,11 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   }
 
   if (info.type == ProcessType::kModelCache) {
+    const bool open = circuitBreaker_.registerCrash(kCircuitKeyModelCache);
+    if (open) {
+      std::cerr << "[supervisor] model-cache circuit breaker OPEN\n";
+      return;
+    }
     if (startModelCache()) {
       waitForModelReady();
     }
@@ -347,6 +355,11 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   }
 
   if (info.type == ProcessType::kApiServer) {
+    const bool open = circuitBreaker_.registerCrash(kCircuitKeyApiServer);
+    if (open) {
+      std::cerr << "[supervisor] api-server circuit breaker OPEN\n";
+      return;
+    }
     startApiServer();
   }
 }
