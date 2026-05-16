@@ -1,0 +1,134 @@
+'use strict';
+
+const fs = require('node:fs');
+const net = require('node:net');
+const path = require('node:path');
+const express = require('express');
+const { WorkerPool } = require('./ipc');
+const { registerInferRoutes } = require('./routes/infer');
+
+function parseArgs(argv) {
+  const options = {};
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith('--') && arg.includes('=')) {
+      const idx = arg.indexOf('=');
+      const key = arg.slice(2, idx);
+      const value = arg.slice(idx + 1);
+      options[key] = value;
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) {
+        options[key] = next;
+        i += 1;
+      } else {
+        options[key] = '1';
+      }
+    }
+  }
+  return options;
+}
+
+function parseSupervisorMessage(data) {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+function startSupervisorIpcListener(socketPath, workerPool) {
+  try {
+    if (fs.existsSync(socketPath)) {
+      fs.unlinkSync(socketPath);
+    }
+  } catch (err) {
+    console.error(`[api-server] failed to unlink existing socket ${socketPath}:`, err.message);
+  }
+
+  const server = net.createServer((socket) => {
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      while (true) {
+        const idx = buffer.indexOf('\n');
+        if (idx < 0) {
+          break;
+        }
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) {
+          continue;
+        }
+        const msg = parseSupervisorMessage(line);
+        if (msg) {
+          workerPool.handleSupervisorMessage(msg);
+        }
+      }
+    });
+  });
+
+  server.on('error', (err) => {
+    console.error('[api-server] supervisor IPC listener error:', err.message);
+  });
+
+  server.listen(socketPath, () => {
+    console.log(`[api-server] supervisor notify listener on ${socketPath}`);
+  });
+
+  const cleanup = () => {
+    server.close(() => {
+      try {
+        if (fs.existsSync(socketPath)) {
+          fs.unlinkSync(socketPath);
+        }
+      } catch {
+        // no-op
+      }
+    });
+  };
+
+  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('exit', cleanup);
+}
+
+const args = parseArgs(process.argv);
+const port = Number(args.port || process.env.EDGE_API_PORT || 11434);
+const workerCount = Number(process.env.EDGE_WORKER_COUNT || 2);
+const workerSocketPrefix = process.env.EDGE_WORKER_SOCKET_PREFIX || '/tmp/edge-worker-';
+const supervisorSocketPath =
+  args['supervisor-socket'] || process.env.EDGE_API_NOTIFY_SOCK || '/tmp/edge-api-notify.sock';
+
+const app = express();
+app.use(express.json({ limit: '2mb' }));
+
+const workerPool = new WorkerPool({
+  workerCount,
+  workerSocketPrefix,
+});
+
+registerInferRoutes(app, workerPool);
+
+app.get('/health', (_req, res) => {
+  const health = workerPool.getHealth();
+  res.json({
+    workers: health.workers.map((w) => ({ id: w.id, status: w.status })),
+    activeSlots: health.activeSlots,
+    uptime: Math.floor(health.uptimeMs / 1000),
+  });
+});
+
+app.use((err, _req, res, _next) => {
+  console.error('[api-server] unhandled route error:', err);
+  res.status(500).json({ error: 'internal_error' });
+});
+
+startSupervisorIpcListener(path.resolve(supervisorSocketPath), workerPool);
+
+app.listen(port, '127.0.0.1', () => {
+  console.log(`[api-server] listening on http://127.0.0.1:${port}`);
+});
