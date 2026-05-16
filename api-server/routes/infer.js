@@ -28,6 +28,8 @@ function registerInferRoutes(app, workerPool) {
 
     try {
       const result = await workerPool.runInference({ prompt, requestId, mfeId });
+      res.setHeader('X-Inference-Device', String(result.device || 'cpu'));
+      res.setHeader('X-Inference-Degraded', String(Boolean(result.degraded)));
       res.json({
         requestId,
         result: result.text,
