@@ -1,0 +1,35 @@
+# Build outputs
+/build/
+**/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Node.js dependencies
+node_modules/
+api-server/node_modules/
+shell-app/node_modules/
+
+# Python virtualenv/cache
+venv/
+__pycache__/
+*.pyc
+
+# Runtime IPC/state
+/tmp/edge-*.sock
+/tmp/edge-runtime/
+/tmp/edge-crash.log
+/dev/shm/edge-*
+
+# Logs
+*.log
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Downloaded model artifacts (keep placeholder)
+models/*
+!models/.gitkeep
