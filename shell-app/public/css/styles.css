@@ -1,0 +1,93 @@
+.shell-page {
+    font-family: Arial, sans-serif;
+    margin: 24px;
+}
+
+.shell-page a {
+    display: block;
+    margin: 10px 0;
+    font-size: 18px;
+}
+
+.docqa-page {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    max-width: 900px;
+}
+
+.docqa-page .row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.docqa-page input {
+    flex: 1;
+    padding: 10px;
+}
+
+.docqa-page button {
+    padding: 10px 14px;
+}
+
+.docqa-page #queueBanner {
+    display: none;
+    margin: 10px 0;
+    padding: 8px;
+    background: #fff4cc;
+}
+
+.docqa-page #cancelBtn {
+    display: none;
+}
+
+.docqa-page #chat {
+    border: 1px solid #ddd;
+    min-height: 260px;
+    padding: 12px;
+    white-space: pre-wrap;
+}
+
+.docqa-page .msg-user {
+    color: #1e4da1;
+}
+
+.docqa-page .msg-bot {
+    color: #222;
+    margin: 6px 0 12px;
+}
+
+.docqa-page .msg-error {
+    color: #b10000;
+}
+
+.meeting-page {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    max-width: 900px;
+}
+
+.meeting-page textarea {
+    width: 100%;
+    min-height: 130px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.meeting-page button {
+    padding: 10px 14px;
+    margin-right: 8px;
+}
+
+.meeting-page #status {
+    margin: 10px 0;
+    padding: 8px;
+    background: #eef5ff;
+}
+
+.meeting-page #output {
+    border: 1px solid #ddd;
+    min-height: 220px;
+    padding: 12px;
+    white-space: pre-wrap;
+}

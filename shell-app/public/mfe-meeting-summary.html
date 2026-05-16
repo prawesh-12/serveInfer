@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Meeting Summariser</title>
+        <link rel="stylesheet" href="/css/styles.css" />
+    </head>
+    <body class="meeting-page">
+        <h2>Meeting Summariser</h2>
+        <textarea
+            id="transcript"
+            placeholder="Paste meeting transcript..."
+        ></textarea>
+        <div>
+            <button id="summariseBtn">Summarise</button>
+            <button id="stopBtn" disabled>Stop</button>
+        </div>
+        <div id="status">Idle</div>
+        <div id="output"></div>
+        <script src="/js/mfe-meeting-summary.js" defer></script>
+    </body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "edge-shell-app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
