@@ -108,6 +108,8 @@ echo "[start] launching shell-app..."
 (
   export EDGE_SHELL_PORT="$SHELL_PORT"
   export EDGE_API_BASE="http://127.0.0.1:$API_PORT"
+  export EDGE_WORKER_COUNT="$WORKER_COUNT"
+  export EDGE_MAX_SLOTS="${EDGE_MAX_SLOTS:-$WORKER_COUNT}"
   export EDGE_LOG_LEVEL="$LOG_LEVEL"
   node "$SHELL_ENTRY"
 ) &

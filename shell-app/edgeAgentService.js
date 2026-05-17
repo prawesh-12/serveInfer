@@ -5,8 +5,10 @@ const { Scheduler } = require('./scheduler');
 class EdgeAgentService {
   constructor() {
     this.apiBase = process.env.EDGE_API_BASE || 'http://127.0.0.1:11434';
+    const workerCount = Number(process.env.EDGE_WORKER_COUNT || 2);
+    const maxSlots = Number(process.env.EDGE_MAX_SLOTS || workerCount || 4);
     this.scheduler = new Scheduler({
-      maxSlots: Number(process.env.EDGE_MAX_SLOTS || 4),
+      maxSlots,
       maxPerMfe: Number(process.env.EDGE_MAX_PER_MFE || 2),
       maxQueue: Number(process.env.EDGE_MAX_QUEUE || 20),
       agingMs: Number(process.env.EDGE_AGING_MS || 15_000),
