@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE_DIR="/tmp/edge-runtime"
 
+ENV_FILE="$ROOT/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
+API_PORT="${EDGE_API_PORT:-11434}"
+SHELL_PORT="${EDGE_SHELL_PORT:-3000}"
+
 stop_from_pidfile() {
   local label="$1"
   local pidfile="$2"
@@ -37,10 +48,27 @@ find_runtime_pids() {
     index($0, root "/build/model-cache/edge-model-cache") > 0 ||
     index($0, root "/build/inference-worker/edge-inference-worker") > 0 ||
     index($0, "node " root "/api-server/server.js") > 0 ||
-    index($0, "node " root "/shell-app/server.js") > 0 {
+    index($0, "node " root "/shell-app/server.js") > 0 ||
+    index($0, "node api-server/server.js") > 0 ||
+    index($0, "node ./api-server/server.js") > 0 ||
+    index($0, "node shell-app/server.js") > 0 ||
+    index($0, "node ./shell-app/server.js") > 0 {
       print $1
     }
   '
+}
+
+find_port_pids() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+    return
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnpH "( sport = :$port )" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+      | sort -u
+  fi
 }
 
 kill_pid_list() {
@@ -77,7 +105,31 @@ if [[ "${#runtime_pids[@]}" -gt 0 ]]; then
   fi
 fi
 
+mapfile -t port_pids < <(
+  {
+    find_port_pids "$API_PORT"
+    find_port_pids "$SHELL_PORT"
+  } | sort -u
+)
+if [[ "${#port_pids[@]}" -gt 0 ]]; then
+  echo "[stop] stopping listeners on ports $API_PORT/$SHELL_PORT: ${port_pids[*]}"
+  kill_pid_list TERM "${port_pids[@]}"
+  sleep 1
+
+  mapfile -t still_listening < <(
+    for pid in "${port_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        echo "$pid"
+      fi
+    done
+  )
+
+  if [[ "${#still_listening[@]}" -gt 0 ]]; then
+    kill_pid_list KILL "${still_listening[@]}"
+  fi
+fi
+
 rm -f /tmp/edge-supervisor.sock /tmp/edge-api-notify.sock /tmp/edge-worker-*.sock
-rm -f /dev/shm/edge-model-weights
+rm -f /dev/shm/edge-model-weights /dev/shm/edge-model-weights.meta
 
 echo "[stop] runtime processes stopped."
