@@ -7,17 +7,40 @@
         <link rel="stylesheet" href="/css/styles.css" />
     </head>
     <body class="meeting-page">
-        <h2>Meeting Summariser</h2>
-        <textarea
-            id="transcript"
-            placeholder="Paste meeting transcript..."
-        ></textarea>
-        <div>
-            <button id="summariseBtn">Summarise</button>
-            <button id="stopBtn" disabled>Stop</button>
-        </div>
-        <div id="status">Idle</div>
-        <div id="output"></div>
+        <header class="mfe-header">
+            <div>
+                <p class="eyebrow">Streaming MFE</p>
+                <h2>Meeting Summariser</h2>
+            </div>
+            <div id="streamHealth" class="status-pill">checking</div>
+        </header>
+
+        <section class="panel">
+            <textarea id="transcript" placeholder="Paste meeting transcript..."></textarea>
+            <div class="action-row">
+                <button id="summariseBtn" type="button">Start SSE Stream</button>
+                <button id="stopBtn" type="button" disabled>Stop / Cancel</button>
+                <button id="clearStreamBtn" type="button">Clear</button>
+            </div>
+            <div id="status" class="queue-banner">Idle</div>
+        </section>
+
+        <section class="split-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>Generated Summary</h3>
+                    <span id="streamMeta">no stream yet</span>
+                </div>
+                <div id="output" class="scroll-box empty-state">No tokens yet.</div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>SSE Events</h3>
+                    <span id="streamQueueMeta">idle</span>
+                </div>
+                <div id="streamEvents" class="event-log"></div>
+            </div>
+        </section>
         <script src="/js/mfe-meeting-summary.js" defer></script>
     </body>
 </html>

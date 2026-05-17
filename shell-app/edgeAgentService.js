@@ -64,6 +64,18 @@ class EdgeAgentService {
     return this.scheduler.getSnapshot();
   }
 
+  async getAgentHealth() {
+    const response = await fetch(`${this.apiBase}/health`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(body.error || 'agent_health_failed');
+      error.status = response.status;
+      error.payload = body;
+      throw error;
+    }
+    return body;
+  }
+
   async _streamFromApi({ requestId, prompt, mfeId, signal, onToken, onDone }) {
     const url = new URL(`${this.apiBase}/infer/stream`);
     url.searchParams.set('requestId', requestId);

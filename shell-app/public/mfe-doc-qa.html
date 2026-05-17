@@ -7,20 +7,44 @@
         <link rel="stylesheet" href="/css/styles.css" />
     </head>
     <body class="docqa-page">
-        <h2>Document Q&A</h2>
-        <div class="row">
-            <input
-                id="prompt"
-                placeholder="Ask a question about the document..."
-            />
-            <button id="askBtn">Submit (HIGH)</button>
-            <button id="prefetchBtn">Prefetch suggestions (LOW)</button>
-        </div>
-        <div id="queueBanner"></div>
-        <div class="row">
-            <button id="cancelBtn">Cancel</button>
-        </div>
-        <div id="chat"></div>
+        <header class="mfe-header">
+            <div>
+                <p class="eyebrow">MFE</p>
+                <h2>Document Q&A</h2>
+            </div>
+            <div id="docHealth" class="status-pill">checking</div>
+        </header>
+
+        <section class="panel">
+            <div class="input-row">
+                <input id="prompt" placeholder="Ask a question about the document..." />
+                <button id="askBtn" type="button">Submit HIGH</button>
+                <button id="prefetchBtn" type="button">Prefetch LOW</button>
+                <button id="burstBtn" type="button">Burst LOW x5</button>
+            </div>
+            <div id="queueBanner" class="queue-banner"></div>
+            <div class="action-row">
+                <button id="cancelBtn" type="button">Cancel Current</button>
+                <button id="clearBtn" type="button">Clear</button>
+            </div>
+        </section>
+
+        <section class="split-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>Conversation</h3>
+                    <span id="lastMeta">no request yet</span>
+                </div>
+                <div id="chat" class="scroll-box empty-state">No requests yet.</div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>Lifecycle Events</h3>
+                    <span id="queueMeta">idle</span>
+                </div>
+                <div id="events" class="event-log"></div>
+            </div>
+        </section>
         <script src="/js/mfe-doc-qa.js" defer></script>
     </body>
 </html>

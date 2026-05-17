@@ -1,93 +1,370 @@
-.shell-page {
-    font-family: Arial, sans-serif;
-    margin: 24px;
+* {
+    box-sizing: border-box;
 }
 
-.shell-page a {
-    display: block;
-    margin: 10px 0;
-    font-size: 18px;
+body {
+    margin: 0;
+    color: #1f2933;
+    background: #f5f7fb;
+    font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
 }
 
-.docqa-page {
-    font-family: Arial, sans-serif;
-    margin: 20px;
-    max-width: 900px;
+button,
+input,
+textarea {
+    font: inherit;
 }
 
-.docqa-page .row {
+button,
+a {
+    border-radius: 6px;
+}
+
+button {
+    border: 1px solid #b8c2d3;
+    background: #ffffff;
+    color: #182635;
+    min-height: 40px;
+    padding: 9px 12px;
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    border-color: #3563e9;
+    color: #173a9a;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+a {
+    color: #1d4ed8;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.shell-page,
+.docqa-page,
+.meeting-page {
+    min-height: 100vh;
+    padding: 24px;
+}
+
+.app-header,
+.mfe-header,
+.panel-header,
+.input-row,
+.action-row {
     display: flex;
-    gap: 8px;
-    margin-bottom: 10px;
+    align-items: center;
+    gap: 12px;
 }
 
-.docqa-page input {
+.app-header,
+.mfe-header {
+    justify-content: space-between;
+    margin-bottom: 18px;
+}
+
+.app-header h1,
+.mfe-header h2 {
+    margin: 0;
+    font-size: 28px;
+    line-height: 1.2;
+}
+
+.eyebrow {
+    margin: 0 0 4px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+.nav-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.nav-actions a,
+.panel-header a {
+    border: 1px solid #c9d3e3;
+    background: #ffffff;
+    padding: 9px 12px;
+}
+
+.shell-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(360px, 1fr) minmax(360px, 1fr);
+    gap: 14px;
+    min-height: calc(100vh - 118px);
+}
+
+.panel {
+    border: 1px solid #d8e0ec;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    padding: 16px;
+}
+
+.panel-header {
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.panel-header h2,
+.panel-header h3 {
+    margin: 0;
+    font-size: 17px;
+}
+
+.panel-header span {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.diagnostics-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.metric {
+    border: 1px solid #e0e7f0;
+    border-radius: 6px;
+    background: #f8fafc;
+    padding: 12px;
+}
+
+.metric span {
+    display: block;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.metric strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 20px;
+}
+
+.checklist {
+    margin-top: 16px;
+}
+
+.checklist h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+}
+
+.checklist ul {
+    margin: 0;
+    padding-left: 18px;
+    color: #334155;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.json-view {
     flex: 1;
-    padding: 10px;
+    min-height: 160px;
+    margin: 16px 0 0;
+    overflow: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #111827;
+    color: #d1fae5;
+    padding: 12px;
+    font-size: 12px;
 }
 
-.docqa-page button {
-    padding: 10px 14px;
+.mfe-frame-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
-.docqa-page #queueBanner {
+iframe {
+    width: 100%;
+    flex: 1;
+    min-height: 620px;
+    border: 1px solid #d8e0ec;
+    border-radius: 6px;
+    background: #ffffff;
+}
+
+.status-pill {
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #f8fafc;
+    min-width: 116px;
+    padding: 7px 10px;
+    color: #475569;
+    text-align: center;
+    font-size: 13px;
+}
+
+.status-pill.ok {
+    border-color: #86efac;
+    background: #f0fdf4;
+    color: #166534;
+}
+
+.status-pill.bad {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+}
+
+.input-row {
+    align-items: stretch;
+}
+
+.input-row input {
+    flex: 1;
+    min-width: 180px;
+    border: 1px solid #c9d3e3;
+    border-radius: 6px;
+    padding: 10px 12px;
+}
+
+.action-row {
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.queue-banner {
     display: none;
-    margin: 10px 0;
-    padding: 8px;
-    background: #fff4cc;
+    margin-top: 12px;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    background: #eff6ff;
+    padding: 10px 12px;
+    color: #1e3a8a;
 }
 
-.docqa-page #cancelBtn {
+#cancelBtn {
     display: none;
 }
 
-.docqa-page #chat {
-    border: 1px solid #ddd;
-    min-height: 260px;
+.split-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.scroll-box,
+.event-log {
+    min-height: 300px;
+    max-height: calc(100vh - 250px);
+    overflow: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #fbfdff;
     padding: 12px;
     white-space: pre-wrap;
 }
 
-.docqa-page .msg-user {
-    color: #1e4da1;
+.empty-state {
+    color: #64748b;
 }
 
-.docqa-page .msg-bot {
-    color: #222;
-    margin: 6px 0 12px;
+.msg-user,
+.msg-bot,
+.msg-error {
+    border-bottom: 1px solid #e7edf6;
+    padding: 9px 0;
 }
 
-.docqa-page .msg-error {
-    color: #b10000;
+.msg-user {
+    color: #1d4ed8;
+    font-weight: 700;
 }
 
-.meeting-page {
-    font-family: Arial, sans-serif;
-    margin: 20px;
-    max-width: 900px;
+.msg-bot {
+    color: #182635;
+}
+
+.msg-error {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.event-item {
+    border-left: 3px solid #cbd5e1;
+    padding: 7px 0 7px 10px;
+    color: #334155;
+    font-size: 13px;
+}
+
+.event-item strong {
+    color: #111827;
+}
+
+.event-item.ok {
+    border-left-color: #22c55e;
+}
+
+.event-item.warn {
+    border-left-color: #f59e0b;
+}
+
+.event-item.bad {
+    border-left-color: #ef4444;
 }
 
 .meeting-page textarea {
     width: 100%;
-    min-height: 130px;
-    padding: 10px;
-    margin-bottom: 10px;
-}
-
-.meeting-page button {
-    padding: 10px 14px;
-    margin-right: 8px;
-}
-
-.meeting-page #status {
-    margin: 10px 0;
-    padding: 8px;
-    background: #eef5ff;
-}
-
-.meeting-page #output {
-    border: 1px solid #ddd;
-    min-height: 220px;
+    min-height: 150px;
+    resize: vertical;
+    border: 1px solid #c9d3e3;
+    border-radius: 6px;
     padding: 12px;
-    white-space: pre-wrap;
+}
+
+@media (max-width: 1180px) {
+    .shell-grid,
+    .split-grid {
+        grid-template-columns: 1fr;
+    }
+
+    iframe {
+        min-height: 520px;
+    }
+}
+
+@media (max-width: 720px) {
+    .shell-page,
+    .docqa-page,
+    .meeting-page {
+        padding: 16px;
+    }
+
+    .app-header,
+    .mfe-header,
+    .input-row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .metric-grid {
+        grid-template-columns: 1fr;
+    }
 }

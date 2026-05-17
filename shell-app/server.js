@@ -234,6 +234,17 @@ app.get('/api/health', (_req, res) => {
   res.json(service.getSnapshot());
 });
 
+app.get('/api/agent-health', async (_req, res) => {
+  try {
+    res.json(await service.getAgentHealth());
+  } catch (err) {
+    res.status(Number(err?.status || 503)).json({
+      error: err?.payload?.error || 'agent_unreachable',
+      message: err instanceof Error ? err.message : 'unknown_error',
+    });
+  }
+});
+
 app.listen(port, () => {
   logger.info(`listening on http://127.0.0.1:${port} (log level: ${logger.level})`);
 });
