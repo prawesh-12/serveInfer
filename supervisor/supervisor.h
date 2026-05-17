@@ -74,10 +74,13 @@ class Supervisor {
   void reapChildren();
   void handleCrash(pid_t pid, int status);
   void shutdownChildren();
+  void restartWorkersAfterModelCacheRestart();
   void cleanupSocket();
   void drainSupervisorSocket();
 
   void writeCrashLog(const ProcessInfo& info, int status, const std::string& reason) const;
+  void writeModelConfig() const;
+  bool crashLimitOpenFromDisk(const ProcessInfo& info) const;
   bool notifyApiServerWorkerCrash(int workerId) const;
 
   static std::string processTypeToString(ProcessType type);

@@ -92,6 +92,18 @@ app.post('/api/infer', async (req, res) => {
       res.status(499).json({ error: 'request_cancelled', requestId });
       return;
     }
+    if (err?.name === 'SchedulerError' && err.code === 'scheduler_overloaded') {
+      res.status(429).json({ error: 'scheduler_overloaded', requestId });
+      return;
+    }
+    if (err?.name === 'SchedulerError' && err.code === 'queue_timeout') {
+      res.status(408).json({
+        error: 'queue_timeout',
+        retryable: true,
+        requestId,
+      });
+      return;
+    }
     res.status(status).json({
       error: payload?.error || 'infer_failed',
       message: err instanceof Error ? err.message : 'unknown_error',
@@ -150,6 +162,17 @@ app.get('/api/stream', async (req, res) => {
           });
         } else if (status.state === 'started') {
           sendSse('started', { requestId });
+        } else if (status.state === 'cancelled') {
+          sendSse('cancelled', {
+            requestId,
+            reason: status.reason || 'user_cancelled',
+          });
+        } else if (status.state === 'timeout') {
+          sendSse('timeout', {
+            requestId,
+            waitedMs: status.waitedMs,
+            retryable: Boolean(status.retryable),
+          });
         }
       },
       onToken: (payload) => {
@@ -173,6 +196,10 @@ app.get('/api/stream', async (req, res) => {
       };
       if (err?.payload?.retryAfterSeconds) {
         payload.retryAfterSeconds = Number(err.payload.retryAfterSeconds);
+      }
+      if (err?.name === 'SchedulerError') {
+        payload.error = err.code || payload.error;
+        payload.retryable = Boolean(err.details?.retryable);
       }
       sendSse('error', payload);
       res.end();

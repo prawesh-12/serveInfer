@@ -1,7 +1,10 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const fs = require('node:fs');
 const { WorkerPoolError } = require('../ipc');
+
+const LAST_REQUEST_PATH = process.env.EDGE_LAST_REQUEST_PATH || '/tmp/edge-last-request.json';
 
 function sendSse(res, event, payload) {
   res.write(`event: ${event}\n`);
@@ -15,6 +18,15 @@ function sanitizePrompt(value) {
   return value.trim();
 }
 
+function persistLastRequest({ requestId, mfeId }) {
+  const payload = {
+    requestId,
+    mfeId,
+    timestamp: new Date().toISOString(),
+  };
+  fs.writeFile(LAST_REQUEST_PATH, `${JSON.stringify(payload)}\n`, () => {});
+}
+
 function registerInferRoutes(app, workerPool) {
   app.post('/infer', async (req, res) => {
     const prompt = sanitizePrompt(req.body?.prompt);
@@ -26,10 +38,13 @@ function registerInferRoutes(app, workerPool) {
       return;
     }
 
+    persistLastRequest({ requestId, mfeId });
+
     try {
       const result = await workerPool.runInference({ prompt, requestId, mfeId });
       res.setHeader('X-Inference-Device', String(result.device || 'cpu'));
       res.setHeader('X-Inference-Degraded', String(Boolean(result.degraded)));
+      res.setHeader('X-Latency-Mode', result.degraded ? 'degraded' : 'normal');
       res.json({
         requestId,
         result: result.text,
@@ -38,17 +53,23 @@ function registerInferRoutes(app, workerPool) {
       });
     } catch (err) {
       if (err instanceof WorkerPoolError && err.code === 'worker_crashed') {
+        const retryAfterSeconds = Number(err.details?.retryAfterSeconds ?? 2);
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+        res.setHeader('X-Edge-Error', 'worker_crash');
         res.status(503).json({
           error: 'worker_crashed',
-          retryAfterSeconds: Number(err.details?.retryAfterSeconds ?? 2),
+          retryAfterSeconds,
           requestId,
         });
         return;
       }
       if (err instanceof WorkerPoolError && err.code === 'no_ready_workers') {
+        const retryAfterSeconds = Number(err.details?.retryAfterSeconds ?? 1);
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+        res.setHeader('X-Edge-Error', 'no_ready_workers');
         res.status(503).json({
           error: 'no_ready_workers',
-          retryAfterSeconds: Number(err.details?.retryAfterSeconds ?? 1),
+          retryAfterSeconds,
           requestId,
         });
         return;
@@ -70,6 +91,8 @@ function registerInferRoutes(app, workerPool) {
       res.status(400).json({ error: 'prompt_required' });
       return;
     }
+
+    persistLastRequest({ requestId, mfeId });
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -103,16 +126,19 @@ function registerInferRoutes(app, workerPool) {
       res.end();
     } catch (err) {
       if (err instanceof WorkerPoolError && err.code === 'worker_crashed') {
+        const retryAfterSeconds = Number(err.details?.retryAfterSeconds ?? 2);
         if (!res.headersSent) {
+          res.setHeader('Retry-After', String(retryAfterSeconds));
+          res.setHeader('X-Edge-Error', 'worker_crash');
           res.status(503).json({
             error: 'worker_crashed',
-            retryAfterSeconds: Number(err.details?.retryAfterSeconds ?? 2),
+            retryAfterSeconds,
             requestId,
           });
         } else {
           sendSse(res, 'error', {
             error: 'worker_crashed',
-            retryAfterSeconds: Number(err.details?.retryAfterSeconds ?? 2),
+            retryAfterSeconds,
             requestId,
           });
           res.end();

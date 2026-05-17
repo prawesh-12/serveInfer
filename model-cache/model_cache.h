@@ -35,7 +35,7 @@ class ModelCache {
   static std::uint64_t updateChecksum(std::uint64_t seed, const char* data, std::size_t len);
 
   bool openModelFile(std::size_t& modelSize);
-  bool createSharedMemory(std::size_t totalSize);
+  bool createSharedMemory(std::size_t modelSize);
   bool loadModelIntoSharedMemory(std::size_t modelSize);
   void cleanup();
 
@@ -44,6 +44,9 @@ class ModelCache {
 
   int modelFd_ = -1;
   int shmFd_ = -1;
+  int metaFd_ = -1;
   void* shmBase_ = nullptr;
+  void* metaBase_ = nullptr;
   std::size_t shmSize_ = 0;
+  std::size_t metaSize_ = 0;
 };

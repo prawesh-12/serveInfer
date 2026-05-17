@@ -13,8 +13,10 @@ class Scheduler {
   constructor(options = {}) {
     this.maxSlots = Number(options.maxSlots ?? 4);
     this.maxPerMfe = Number(options.maxPerMfe ?? 2);
+    this.maxQueue = Number(options.maxQueue ?? 20);
     this.agingMs = Number(options.agingMs ?? 15_000);
     this.defaultDurationMs = Number(options.defaultDurationMs ?? 8_000);
+    this.queueTimeoutMs = Number(options.queueTimeoutMs ?? 30_000);
 
     this.queue = [];
     this.active = new Map();
@@ -24,6 +26,15 @@ class Scheduler {
   }
 
   enqueue({ requestId, mfeId, priority, type, execute, onStatus }) {
+    if (this.queue.length >= this.maxQueue) {
+      const error = new SchedulerError('scheduler_overloaded', 'scheduler_overloaded', {
+        requestId,
+        maxQueue: this.maxQueue,
+      });
+      error.status = 429;
+      throw error;
+    }
+
     const createdAt = Date.now();
     const abortController = new AbortController();
     let resolvePromise;
@@ -44,7 +55,35 @@ class Scheduler {
       abortController,
       resolve: resolvePromise,
       reject: rejectPromise,
+      queueTimer: null,
     };
+
+    job.queueTimer = setTimeout(() => {
+      const queueIndex = this.queue.findIndex((item) => item.requestId === requestId);
+      if (queueIndex < 0) {
+        return;
+      }
+      this.queue.splice(queueIndex, 1);
+      const waitedMs = Date.now() - job.createdAt;
+      this._notify(job, 'timeout', {
+        waitedMs,
+        retryable: true,
+      });
+      const error = new SchedulerError('queue_timeout', 'queue_timeout', {
+        requestId,
+        waitedMs,
+        retryable: true,
+      });
+      error.status = 408;
+      job.reject(error);
+      this.done.set(requestId, {
+        state: 'timeout',
+        requestId,
+        waitedMs,
+        retryable: true,
+        finishedAt: Date.now(),
+      });
+    }, this.queueTimeoutMs);
 
     this.queue.push(job);
     this._notify(job, 'queued', {
@@ -67,6 +106,10 @@ class Scheduler {
       const error = new SchedulerError('request_cancelled', 'request_cancelled', {
         requestId,
         state: 'queued',
+      });
+      clearTimeout(job.queueTimer);
+      this._notify(job, 'cancelled', {
+        reason: 'user_cancelled',
       });
       job.reject(error);
       this.done.set(requestId, {
@@ -129,6 +172,7 @@ class Scheduler {
       limits: {
         maxSlots: this.maxSlots,
         maxPerMfe: this.maxPerMfe,
+        maxQueue: this.maxQueue,
       },
       activeCount: this.active.size,
       queueLength: this.queue.length,
@@ -204,6 +248,7 @@ class Scheduler {
 
   _run(job) {
     const startedAt = Date.now();
+    clearTimeout(job.queueTimer);
     this.active.set(job.requestId, job);
     this.perMfeActive.set(job.mfeId, (this.perMfeActive.get(job.mfeId) || 0) + 1);
     this._notify(job, 'started', { requestId: job.requestId });

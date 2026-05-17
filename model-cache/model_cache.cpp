@@ -1,5 +1,7 @@
 #include "model_cache.h"
 
+#include "../ipc/paths.h"
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -31,8 +33,7 @@ bool ModelCache::initialize() {
     return false;
   }
 
-  const std::size_t totalSize = kHeaderSize + modelSize;
-  if (!createSharedMemory(totalSize)) {
+  if (!createSharedMemory(modelSize)) {
     return false;
   }
 
@@ -87,7 +88,7 @@ bool ModelCache::openModelFile(std::size_t& modelSize) {
   return true;
 }
 
-bool ModelCache::createSharedMemory(std::size_t totalSize) {
+bool ModelCache::createSharedMemory(std::size_t modelSize) {
   shmFd_ = shm_open(config_.shmName.c_str(), O_CREAT | O_RDWR, 0666);
   if (shmFd_ < 0) {
     std::cerr << "[model-cache] shm_open failed for " << config_.shmName << ": " << std::strerror(errno)
@@ -95,32 +96,55 @@ bool ModelCache::createSharedMemory(std::size_t totalSize) {
     return false;
   }
 
-  if (ftruncate(shmFd_, static_cast<off_t>(totalSize)) != 0) {
+  if (ftruncate(shmFd_, static_cast<off_t>(modelSize)) != 0) {
     std::cerr << "[model-cache] ftruncate failed: " << std::strerror(errno) << '\n';
     return false;
   }
 
-  shmBase_ = mmap(nullptr, totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
+  shmBase_ = mmap(nullptr, modelSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
   if (shmBase_ == MAP_FAILED) {
     shmBase_ = nullptr;
     std::cerr << "[model-cache] mmap failed: " << std::strerror(errno) << '\n';
     return false;
   }
 
-  shmSize_ = totalSize;
+  shmSize_ = modelSize;
   std::memset(shmBase_, 0, shmSize_);
+
+  const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
+  metaFd_ = shm_open(metaName.c_str(), O_CREAT | O_RDWR, 0666);
+  if (metaFd_ < 0) {
+    std::cerr << "[model-cache] shm_open failed for " << metaName << ": " << std::strerror(errno)
+              << '\n';
+    return false;
+  }
+
+  if (ftruncate(metaFd_, static_cast<off_t>(kHeaderSize)) != 0) {
+    std::cerr << "[model-cache] metadata ftruncate failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  metaBase_ = mmap(nullptr, kHeaderSize, PROT_READ | PROT_WRITE, MAP_SHARED, metaFd_, 0);
+  if (metaBase_ == MAP_FAILED) {
+    metaBase_ = nullptr;
+    std::cerr << "[model-cache] metadata mmap failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  metaSize_ = kHeaderSize;
+  std::memset(metaBase_, 0, metaSize_);
   return true;
 }
 
 bool ModelCache::loadModelIntoSharedMemory(std::size_t modelSize) {
-  auto* header = reinterpret_cast<SharedModelHeader*>(shmBase_);
+  auto* header = reinterpret_cast<SharedModelHeader*>(metaBase_);
   std::memset(header, 0, sizeof(SharedModelHeader));
   std::memcpy(header->magic, "EDGE", 4);
   header->version = 1;
   header->modelSize = static_cast<std::uint64_t>(modelSize);
   header->ready = 0;
 
-  auto* weights = reinterpret_cast<std::uint8_t*>(shmBase_) + kHeaderSize;
+  auto* weights = reinterpret_cast<std::uint8_t*>(shmBase_);
   std::vector<char> buffer(1 << 20);
   std::size_t written = 0;
   std::uint64_t checksum = kFnvOffsetBasis;
@@ -155,8 +179,13 @@ bool ModelCache::loadModelIntoSharedMemory(std::size_t modelSize) {
     std::cerr << "[model-cache] msync failed: " << std::strerror(errno) << '\n';
     return false;
   }
+  if (msync(metaBase_, metaSize_, MS_SYNC) != 0) {
+    std::cerr << "[model-cache] metadata msync failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
 
-  std::cerr << "[model-cache] loaded model bytes: " << modelSize << '\n';
+  std::cerr << "[model-cache] loaded model bytes: " << modelSize << " at "
+            << EdgeIPC::shmFilePath(config_.shmName) << '\n';
   return true;
 }
 
@@ -167,9 +196,20 @@ void ModelCache::cleanup() {
     shmSize_ = 0;
   }
 
+  if (metaBase_ != nullptr && metaSize_ > 0) {
+    munmap(metaBase_, metaSize_);
+    metaBase_ = nullptr;
+    metaSize_ = 0;
+  }
+
   if (shmFd_ >= 0) {
     close(shmFd_);
     shmFd_ = -1;
+  }
+
+  if (metaFd_ >= 0) {
+    close(metaFd_);
+    metaFd_ = -1;
   }
 
   if (modelFd_ >= 0) {
@@ -180,6 +220,11 @@ void ModelCache::cleanup() {
   if (!config_.shmName.empty()) {
     if (shm_unlink(config_.shmName.c_str()) != 0 && errno != ENOENT) {
       std::cerr << "[model-cache] shm_unlink failed for " << config_.shmName << ": "
+                << std::strerror(errno) << '\n';
+    }
+    const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
+    if (shm_unlink(metaName.c_str()) != 0 && errno != ENOENT) {
+      std::cerr << "[model-cache] shm_unlink failed for " << metaName << ": "
                 << std::strerror(errno) << '\n';
     }
   }

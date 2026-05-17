@@ -8,7 +8,9 @@ class EdgeAgentService {
     this.scheduler = new Scheduler({
       maxSlots: Number(process.env.EDGE_MAX_SLOTS || 4),
       maxPerMfe: Number(process.env.EDGE_MAX_PER_MFE || 2),
+      maxQueue: Number(process.env.EDGE_MAX_QUEUE || 20),
       agingMs: Number(process.env.EDGE_AGING_MS || 15_000),
+      queueTimeoutMs: Number(process.env.EDGE_QUEUE_TIMEOUT_MS || 30_000),
       defaultDurationMs: Number(process.env.EDGE_DEFAULT_JOB_MS || 8_000),
     });
   }

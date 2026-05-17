@@ -1,5 +1,8 @@
 #include "worker.h"
 
+#include "../ipc/paths.h"
+#include "../model-cache/model_cache.h"
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -155,8 +158,35 @@ void Worker::requestStop() {
 }
 
 bool Worker::attachSharedMemory() {
+  const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
+  const int metaFd = shm_open(metaName.c_str(), O_RDONLY, 0666);
+  if (metaFd < 0) {
+    std::cerr << "[worker] shm_open(" << metaName << ") failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  void* metaPtr = mmap(nullptr, sizeof(SharedModelHeader), PROT_READ, MAP_SHARED, metaFd, 0);
+  if (metaPtr == MAP_FAILED) {
+    close(metaFd);
+    std::cerr << "[worker] metadata mmap failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  const auto* header = static_cast<const SharedModelHeader*>(metaPtr);
+  const bool validHeader = std::memcmp(header->magic, "EDGE", 4) == 0 && header->ready == 1 &&
+                           header->modelSize > 0;
+  const std::size_t headerModelSize = static_cast<std::size_t>(header->modelSize);
+  if (!validHeader) {
+    munmap(metaPtr, sizeof(SharedModelHeader));
+    close(metaFd);
+    std::cerr << "[worker] shared model metadata is not ready\n";
+    return false;
+  }
+
   shmFd_ = shm_open(config_.shmName.c_str(), O_RDONLY, 0666);
   if (shmFd_ < 0) {
+    munmap(metaPtr, sizeof(SharedModelHeader));
+    close(metaFd);
     std::cerr << "[worker] shm_open(" << config_.shmName << ") failed: " << std::strerror(errno) << '\n';
     return false;
   }
@@ -166,25 +196,40 @@ bool Worker::attachSharedMemory() {
   } else {
     struct stat st {};
     if (fstat(shmFd_, &st) != 0) {
+      munmap(metaPtr, sizeof(SharedModelHeader));
+      close(metaFd);
       std::cerr << "[worker] fstat on shared memory failed: " << std::strerror(errno) << '\n';
       return false;
     }
     shmSize_ = static_cast<std::size_t>(st.st_size);
   }
 
-  if (shmSize_ == 0) {
-    std::cerr << "[worker] shared memory size is zero\n";
+  if (shmSize_ == 0 || shmSize_ != headerModelSize) {
+    munmap(metaPtr, sizeof(SharedModelHeader));
+    close(metaFd);
+    std::cerr << "[worker] shared memory size mismatch: mapped=" << shmSize_
+              << " metadata=" << headerModelSize << '\n';
     return false;
   }
 
   shmPtr_ = mmap(nullptr, shmSize_, PROT_READ, MAP_SHARED, shmFd_, 0);
   if (shmPtr_ == MAP_FAILED) {
     shmPtr_ = nullptr;
+    munmap(metaPtr, sizeof(SharedModelHeader));
+    close(metaFd);
     std::cerr << "[worker] mmap failed: " << std::strerror(errno) << '\n';
     return false;
   }
 
-  std::cerr << "[worker] attached shared memory: " << config_.shmName << " (" << shmSize_ << " bytes)\n";
+  const std::string sharedModelPath = EdgeIPC::shmFilePath(config_.shmName);
+  if (access(sharedModelPath.c_str(), R_OK) == 0) {
+    config_.modelPath = sharedModelPath;
+  }
+
+  std::cerr << "[worker] attached shared GGUF memory: " << config_.shmName << " (" << shmSize_
+            << " bytes, checksum=" << header->checksum << ", path=" << config_.modelPath << ")\n";
+  munmap(metaPtr, sizeof(SharedModelHeader));
+  close(metaFd);
   return true;
 }
 
@@ -411,4 +456,3 @@ std::string Worker::jsonEscape(const std::string& input) {
   }
   return out;
 }
-

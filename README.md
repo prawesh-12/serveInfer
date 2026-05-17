@@ -77,6 +77,8 @@ server_infer/
 - Worker sockets: `/tmp/edge-worker-0.sock`, `/tmp/edge-worker-1.sock`, ...
 - Shared memory name: `/edge-model-weights`
 - Crash log: `/tmp/edge-crash.log`
+- Model config snapshot: `/tmp/edge-model-config.json`
+- Last request snapshot: `/tmp/edge-last-request.json`
 
 All constants are centralized in `ipc/paths.h`.
 
@@ -84,9 +86,12 @@ All constants are centralized in `ipc/paths.h`.
 
 ## 3) Current inference implementation
 
-The worker uses a **thin wrapper (`InferEngine`)** over vendored llama APIs:
+The worker uses a **thin inference wrapper (`InferEngine`)** over vendored llama APIs, but model ownership is handled by the custom Edge runtime:
 
-- Loads model from `EDGE_MODEL_PATH`
+- `edge-model-cache` loads the GGUF bytes once into POSIX shared memory.
+- The raw shared-memory object is exposed at `/dev/shm/edge-model-weights`.
+- Readiness/checksum metadata is stored separately at `/dev/shm/edge-model-weights.meta`.
+- Workers validate the metadata, attach the shared segment, and load llama from the shared-memory GGUF path.
 - Attempts GPU offload (`EDGE_GPU_LAYERS`) unless `EDGE_FORCE_CPU=1`
 - Falls back to CPU if GPU model load fails
 - Supports:
@@ -98,7 +103,9 @@ The worker uses a **thin wrapper (`InferEngine`)** over vendored llama APIs:
     - temperature
     - dist sampler with seed
 
-**Important note:** model-cache shared memory is implemented and attached by workers, but the active llama load path is file-based (`EDGE_MODEL_PATH`) in `InferEngine`.
+This means worker restarts do not reopen the original model path from disk; they attach to the model-cache-owned shared GGUF object.
+
+Qualcomm NPU and Apple ANE fallback branches are intentionally not implemented in this Linux build.
 
 ---
 
@@ -110,6 +117,8 @@ The shell scheduler (`shell-app/scheduler.js`) enforces:
 - Per-MFE (Micro-Frontends) concurrent cap (`maxPerMfe`, default 2)
 - Priority queue: `high`, `normal`, `low`
 - Aging boost every `agingMs` (default 15s)
+- Queue cap (`maxQueue`, default 20)
+- Queue timeout (`queueTimeoutMs`, default 30s)
 - Cancellation support for queued and active requests
 - Queue position + estimated wait reporting
 
@@ -200,7 +209,9 @@ Related scheduler envs (optional, read by shell-app):
 
 - `EDGE_MAX_SLOTS` (default 4)
 - `EDGE_MAX_PER_MFE` (default 2)
+- `EDGE_MAX_QUEUE` (default 20)
 - `EDGE_AGING_MS` (default 15000)
+- `EDGE_QUEUE_TIMEOUT_MS` (default 30000)
 - `EDGE_DEFAULT_JOB_MS` (default 8000)
 
 ---

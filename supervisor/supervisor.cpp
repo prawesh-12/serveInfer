@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <thread>
 #include <utility>
 
@@ -91,6 +92,7 @@ bool Supervisor::start() {
   if (!startModelCache()) {
     return false;
   }
+  writeModelConfig();
   if (!waitForModelReady()) {
     std::cerr << "[supervisor] model cache ready flag was not observed\n";
     return false;
@@ -177,9 +179,10 @@ bool Supervisor::startModelCache() {
 bool Supervisor::waitForModelReady() const {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(config_.modelReadyTimeoutSeconds);
+  const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
 
   while (running_.load() && std::chrono::steady_clock::now() < deadline) {
-    const int fd = shm_open(config_.shmName.c_str(), O_RDONLY, 0666);
+    const int fd = shm_open(metaName.c_str(), O_RDONLY, 0666);
     if (fd < 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
       continue;
@@ -335,7 +338,7 @@ void Supervisor::handleCrash(pid_t pid, int status) {
       std::cerr << "[supervisor] failed to notify api-server for worker crash workerId="
                 << info.workerId << '\n';
     }
-    const bool open = circuitBreaker_.registerCrash(info.workerId);
+    const bool open = circuitBreaker_.registerCrash(info.workerId) || crashLimitOpenFromDisk(info);
     if (open) {
       std::cerr << "[supervisor] Worker " << info.workerId << " circuit breaker OPEN\n";
       return;
@@ -345,19 +348,21 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   }
 
   if (info.type == ProcessType::kModelCache) {
-    const bool open = circuitBreaker_.registerCrash(kCircuitKeyModelCache);
+    const bool open = circuitBreaker_.registerCrash(kCircuitKeyModelCache) || crashLimitOpenFromDisk(info);
     if (open) {
       std::cerr << "[supervisor] model-cache circuit breaker OPEN\n";
       return;
     }
     if (startModelCache()) {
-      waitForModelReady();
+      if (waitForModelReady()) {
+        restartWorkersAfterModelCacheRestart();
+      }
     }
     return;
   }
 
   if (info.type == ProcessType::kApiServer) {
-    const bool open = circuitBreaker_.registerCrash(kCircuitKeyApiServer);
+    const bool open = circuitBreaker_.registerCrash(kCircuitKeyApiServer) || crashLimitOpenFromDisk(info);
     if (open) {
       std::cerr << "[supervisor] api-server circuit breaker OPEN\n";
       return;
@@ -392,6 +397,26 @@ void Supervisor::shutdownChildren() {
   }
   processesByPid_.clear();
   workerPidById_.clear();
+}
+
+void Supervisor::restartWorkersAfterModelCacheRestart() {
+  for (int workerId = 0; workerId < config_.workerCount; ++workerId) {
+    const auto pidIt = workerPidById_.find(workerId);
+    if (pidIt == workerPidById_.end()) {
+      continue;
+    }
+    const pid_t pid = pidIt->second;
+    kill(pid, SIGTERM);
+    waitpid(pid, nullptr, 0);
+    processesByPid_.erase(pid);
+    workerPidById_.erase(pidIt);
+  }
+
+  for (int workerId = 0; workerId < config_.workerCount; ++workerId) {
+    if (workerPidById_.find(workerId) == workerPidById_.end()) {
+      startWorker(workerId);
+    }
+  }
 }
 
 void Supervisor::cleanupSocket() {
@@ -443,6 +468,52 @@ void Supervisor::writeCrashLog(const ProcessInfo& info, int status, const std::s
   out << "{\"ts\":" << nowEpochSeconds() << ",\"pid\":" << info.pid << ",\"type\":\""
       << processTypeToString(info.type) << "\",\"workerId\":" << info.workerId
       << ",\"status\":" << status << ",\"reason\":\"" << jsonEscape(reason) << "\"}\n";
+}
+
+void Supervisor::writeModelConfig() const {
+  std::ofstream out(EdgeIPC::MODEL_CONFIG, std::ios::trunc);
+  if (!out.is_open()) {
+    return;
+  }
+  out << "{\"modelPath\":\"" << jsonEscape(config_.modelPath) << "\",\"shmName\":\""
+      << jsonEscape(config_.shmName) << "\",\"workerCount\":" << config_.workerCount
+      << ",\"pollIntervalMs\":" << config_.pollIntervalMs << "}\n";
+}
+
+bool Supervisor::crashLimitOpenFromDisk(const ProcessInfo& info) const {
+  std::ifstream in(info.crashLog.empty() ? EdgeIPC::CRASH_LOG : info.crashLog);
+  if (!in.is_open()) {
+    return false;
+  }
+
+  const auto now = std::stoll(nowEpochSeconds());
+  const auto minTs = now - 60;
+  const std::string type = processTypeToString(info.type);
+  const std::regex tsPattern("\"ts\"\\s*:\\s*([0-9]+)");
+  const std::regex typePattern("\"type\"\\s*:\\s*\"" + type + "\"");
+  const std::regex workerPattern("\"workerId\"\\s*:\\s*" + std::to_string(info.workerId));
+
+  int count = 0;
+  std::string line;
+  while (std::getline(in, line)) {
+    std::smatch match;
+    if (!std::regex_search(line, match, tsPattern)) {
+      continue;
+    }
+    const auto ts = std::stoll(match[1].str());
+    if (ts < minTs) {
+      continue;
+    }
+    if (!std::regex_search(line, typePattern)) {
+      continue;
+    }
+    if (info.type == ProcessType::kWorker && !std::regex_search(line, workerPattern)) {
+      continue;
+    }
+    ++count;
+  }
+
+  return count >= 3;
 }
 
 bool Supervisor::notifyApiServerWorkerCrash(int workerId) const {
