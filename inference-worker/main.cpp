@@ -39,6 +39,17 @@ bool parseSizeArg(const std::string& raw, std::size_t& out) {
   }
 }
 
+bool parseFloatArg(const std::string& raw, float& out) {
+  try {
+    out = std::stof(raw);
+    return true;
+  } catch (const std::invalid_argument&) {
+    return false;
+  } catch (const std::out_of_range&) {
+    return false;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -48,6 +59,21 @@ int main(int argc, char** argv) {
   config.supervisorSocketPath = EdgeIPC::SUPERVISOR_SOCK;
   config.shmName = EdgeIPC::SHM_NAME;
   config.heartbeatIntervalMs = 50;
+  if (const char* modelPath = std::getenv("EDGE_MODEL_PATH")) {
+    config.modelPath = modelPath;
+  }
+  if (const char* maxTokens = std::getenv("EDGE_MAX_TOKENS")) {
+    parseIntArg(maxTokens, config.maxTokens);
+  }
+  if (const char* temperature = std::getenv("EDGE_TEMPERATURE")) {
+    parseFloatArg(temperature, config.temperature);
+  }
+  if (const char* gpuLayers = std::getenv("EDGE_GPU_LAYERS")) {
+    parseIntArg(gpuLayers, config.gpuLayers);
+  }
+  if (const char* seed = std::getenv("EDGE_SEED")) {
+    parseIntArg(seed, config.seed);
+  }
 
   if (const char* forceCpu = std::getenv("EDGE_FORCE_CPU")) {
     config.forceCpu = std::string(forceCpu) == "1";
@@ -87,6 +113,10 @@ int main(int argc, char** argv) {
       config.shmName = value;
       continue;
     }
+    if (takeValue("--model-path", value)) {
+      config.modelPath = value;
+      continue;
+    }
     if (takeValue("--model-size-bytes", value)) {
       if (!parseSizeArg(value, config.modelSizeBytes)) {
         std::cerr << "Invalid --model-size-bytes value: " << value << '\n';
@@ -97,6 +127,34 @@ int main(int argc, char** argv) {
     if (takeValue("--heartbeat-ms", value)) {
       if (!parseIntArg(value, config.heartbeatIntervalMs)) {
         std::cerr << "Invalid --heartbeat-ms value: " << value << '\n';
+        return 1;
+      }
+      continue;
+    }
+    if (takeValue("--max-tokens", value)) {
+      if (!parseIntArg(value, config.maxTokens)) {
+        std::cerr << "Invalid --max-tokens value: " << value << '\n';
+        return 1;
+      }
+      continue;
+    }
+    if (takeValue("--temperature", value)) {
+      if (!parseFloatArg(value, config.temperature)) {
+        std::cerr << "Invalid --temperature value: " << value << '\n';
+        return 1;
+      }
+      continue;
+    }
+    if (takeValue("--gpu-layers", value)) {
+      if (!parseIntArg(value, config.gpuLayers)) {
+        std::cerr << "Invalid --gpu-layers value: " << value << '\n';
+        return 1;
+      }
+      continue;
+    }
+    if (takeValue("--seed", value)) {
+      if (!parseIntArg(value, config.seed)) {
+        std::cerr << "Invalid --seed value: " << value << '\n';
         return 1;
       }
       continue;

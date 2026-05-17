@@ -251,6 +251,8 @@ bool Supervisor::startWorker(int workerId) {
       config_.supervisorSocketPath,
       "--shm-name",
       config_.shmName,
+      "--model-path",
+      config_.modelPath,
   };
   const pid_t pid = forkExec(args);
   if (pid <= 0) {

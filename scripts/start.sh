@@ -83,6 +83,7 @@ fi
 
 echo "[start] launching edge-supervisor..."
 (
+  export EDGE_MODEL_PATH="$MODEL_PATH"
   export EDGE_WORKER_COUNT="$WORKER_COUNT"
   export EDGE_API_PORT="$API_PORT"
   export EDGE_FORCE_CPU="$FORCE_CPU"

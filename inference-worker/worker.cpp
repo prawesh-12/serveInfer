@@ -12,7 +12,7 @@
 #include <cstring>
 #include <iostream>
 #include <regex>
-#include <sstream>
+#include <utility>
 
 namespace {
 
@@ -63,19 +63,6 @@ bool extractBool(const std::string& json, const std::string& key, bool defaultVa
   return match[1] == "true";
 }
 
-std::vector<std::string> splitTokens(const std::string& text) {
-  std::istringstream stream(text);
-  std::vector<std::string> tokens;
-  std::string token;
-  while (stream >> token) {
-    tokens.push_back(token);
-  }
-  if (tokens.empty()) {
-    tokens.push_back(text);
-  }
-  return tokens;
-}
-
 }  // namespace
 
 Worker::Worker(WorkerConfig config) : config_(std::move(config)) {}
@@ -83,21 +70,20 @@ Worker::Worker(WorkerConfig config) : config_(std::move(config)) {}
 Worker::~Worker() {
   requestStop();
   stopHeartbeat();
+  delete engine_;
+  engine_ = nullptr;
 
   if (serverFd_ >= 0) {
     close(serverFd_);
     serverFd_ = -1;
   }
-
   if (!config_.socketPath.empty()) {
     unlink(config_.socketPath.c_str());
   }
-
   if (shmPtr_ != nullptr && shmSize_ > 0) {
     munmap(shmPtr_, shmSize_);
     shmPtr_ = nullptr;
   }
-
   if (shmFd_ >= 0) {
     close(shmFd_);
     shmFd_ = -1;
@@ -111,6 +97,24 @@ bool Worker::init() {
   if (!selectDevice()) {
     return false;
   }
+
+  InferConfig inferConfig;
+  inferConfig.modelPath = config_.modelPath;
+  inferConfig.gpuLayers = config_.gpuLayers;
+  inferConfig.maxTokens = config_.maxTokens;
+  inferConfig.temperature = config_.temperature;
+  inferConfig.seed = config_.seed;
+  inferConfig.forceCpu = config_.forceCpu;
+
+  engine_ = new InferEngine(inferConfig);
+  if (!engine_->init()) {
+    std::cerr << "[worker] failed to initialize inference engine\n";
+    return false;
+  }
+
+  activeDevice_ = engine_->isUsingGPU() ? "cuda" : "cpu";
+  cudaAvailable_.store(engine_->isUsingGPU());
+
   if (!setupSocketServer()) {
     return false;
   }
@@ -190,13 +194,11 @@ bool Worker::selectDevice() {
     activeDevice_ = "cpu";
     return true;
   }
-
   if (access("/dev/nvidia0", R_OK) == 0) {
     cudaAvailable_.store(true);
     activeDevice_ = "cuda";
     return true;
   }
-
   cudaAvailable_.store(false);
   activeDevice_ = "cpu";
   return true;
@@ -218,18 +220,16 @@ bool Worker::setupSocketServer() {
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", config_.socketPath.c_str());
-
   if (bind(serverFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
     std::cerr << "[worker] bind failed for " << config_.socketPath << ": " << std::strerror(errno) << '\n';
     return false;
   }
-
   if (listen(serverFd_, 16) != 0) {
     std::cerr << "[worker] listen failed: " << std::strerror(errno) << '\n';
     return false;
   }
 
-  std::cerr << "[worker] listening on " << config_.socketPath << '\n';
+  std::cerr << "[worker] listening on " << config_.socketPath << " device=" << activeDevice_ << '\n';
   return true;
 }
 
@@ -282,14 +282,18 @@ void Worker::handleClient(int clientFd) {
   InferenceJob job;
   std::string parseError;
   if (!parseJob(payload, job, parseError)) {
-    const std::string errorJson =
-        "{\"type\":\"error\",\"error\":\"" + jsonEscape(parseError) + "\"}\n";
+    const std::string errorJson = "{\"type\":\"error\",\"error\":\"" + jsonEscape(parseError) + "\"}\n";
     sendAll(clientFd, errorJson);
     return;
   }
 
+  if (engine_ == nullptr) {
+    sendAll(clientFd, "{\"type\":\"error\",\"error\":\"engine_not_initialized\"}\n");
+    return;
+  }
+
   if (!job.stream) {
-    const std::string text = inferBlocking(job.prompt);
+    const std::string text = engine_->generate(job.prompt);
     const bool degraded = activeDevice_ == "cpu";
     const std::string resultJson =
         "{\"type\":\"result\",\"requestId\":\"" + jsonEscape(job.requestId) + "\",\"text\":\"" +
@@ -299,19 +303,20 @@ void Worker::handleClient(int clientFd) {
     return;
   }
 
+  bool writeOk = true;
   std::string merged;
-  const auto tokens = inferStreamingTokens(job.prompt);
-  for (const auto& token : tokens) {
-    if (!merged.empty()) {
-      merged.push_back(' ');
+  engine_->generateStreaming(job.prompt, [&](const std::string& token) {
+    if (!writeOk) {
+      return;
     }
     merged += token;
     const std::string tokenJson =
         "{\"type\":\"token\",\"requestId\":\"" + jsonEscape(job.requestId) + "\",\"token\":\"" +
         jsonEscape(token) + "\"}\n";
-    if (!sendAll(clientFd, tokenJson)) {
-      return;
-    }
+    writeOk = sendAll(clientFd, tokenJson);
+  });
+  if (!writeOk) {
+    return;
   }
 
   const bool degraded = activeDevice_ == "cpu";
@@ -320,17 +325,6 @@ void Worker::handleClient(int clientFd) {
       jsonEscape(merged) + "\",\"device\":\"" + activeDevice_ + "\",\"degraded\":" +
       (degraded ? "true" : "false") + "}\n";
   sendAll(clientFd, doneJson);
-}
-
-std::string Worker::inferBlocking(const std::string& prompt) {
-  if (prompt.empty()) {
-    return "Empty prompt received.";
-  }
-  return "Inference response: " + prompt;
-}
-
-std::vector<std::string> Worker::inferStreamingTokens(const std::string& prompt) {
-  return splitTokens(inferBlocking(prompt));
 }
 
 void Worker::startHeartbeat() {
@@ -369,10 +363,8 @@ void Worker::heartbeatLoop() {
     }
 
     if (consecutiveFailures > 0 && consecutiveFailures % 100 == 0) {
-      std::cerr << "[worker] heartbeat delivery failing (last error: " << std::strerror(errno)
-                << ")\n";
+      std::cerr << "[worker] heartbeat delivery failing (last error: " << std::strerror(errno) << ")\n";
     }
-
     std::this_thread::sleep_for(std::chrono::milliseconds(config_.heartbeatIntervalMs));
   }
 }
@@ -419,3 +411,4 @@ std::string Worker::jsonEscape(const std::string& input) {
   }
   return out;
 }
+

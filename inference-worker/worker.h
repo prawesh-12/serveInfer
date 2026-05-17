@@ -4,7 +4,8 @@
 #include <cstddef>
 #include <string>
 #include <thread>
-#include <vector>
+
+#include "inferEngine.h"
 
 struct InferenceJob {
   std::string requestId;
@@ -17,9 +18,14 @@ struct WorkerConfig {
   std::string socketPath;
   std::string supervisorSocketPath;
   std::string shmName;
+  std::string modelPath;
   std::size_t modelSizeBytes = 0;
   int heartbeatIntervalMs = 50;
   bool forceCpu = false;
+  int maxTokens = 512;
+  float temperature = 0.8f;
+  int gpuLayers = 99;
+  int seed = 42;
 };
 
 class Worker {
@@ -38,9 +44,6 @@ class Worker {
   bool parseJob(const std::string& raw, InferenceJob& out, std::string& error) const;
   void handleClient(int clientFd);
 
-  std::string inferBlocking(const std::string& prompt);
-  std::vector<std::string> inferStreamingTokens(const std::string& prompt);
-
   void startHeartbeat();
   void stopHeartbeat();
   void heartbeatLoop();
@@ -52,6 +55,7 @@ class Worker {
   std::atomic<bool> running_{false};
   std::atomic<bool> cudaAvailable_{false};
   std::string activeDevice_{"cpu"};
+  InferEngine* engine_ = nullptr;
 
   int serverFd_ = -1;
   int shmFd_ = -1;

@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const net = require('node:net');
 
 class WorkerPoolError extends Error {
@@ -25,7 +26,7 @@ class WorkerPool {
       this.workers.set(i, {
         workerId: i,
         socketPath: `${this.workerSocketPrefix}${i}.sock`,
-        status: 'ready',
+        status: 'starting',
       });
     }
   }
@@ -54,7 +55,7 @@ class WorkerPool {
     }
     if ((msg.type === 'worker_ready' || msg.type === 'worker_restarted') && Number.isInteger(msg.workerId)) {
       const worker = this.workers.get(msg.workerId);
-      if (worker && worker.status === 'crashed') {
+      if (worker && worker.status !== 'busy') {
         worker.status = 'ready';
       }
     }
@@ -217,6 +218,7 @@ class WorkerPool {
   }
 
   _acquireWorker() {
+    this._refreshWorkerReadiness();
     const worker = Array.from(this.workers.values()).find((w) => w.status === 'ready');
     if (!worker) {
       throw new WorkerPoolError('no ready workers', 'no_ready_workers', 503, {
@@ -225,6 +227,15 @@ class WorkerPool {
     }
     worker.status = 'busy';
     return worker;
+  }
+
+  _refreshWorkerReadiness() {
+    for (const worker of this.workers.values()) {
+      if (worker.status === 'busy' || worker.status === 'crashed') {
+        continue;
+      }
+      worker.status = fs.existsSync(worker.socketPath) ? 'ready' : 'starting';
+    }
   }
 
   _markWorkerCrashed(workerId, requestId) {
