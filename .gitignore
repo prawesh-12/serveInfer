@@ -33,3 +33,5 @@ __pycache__/
 # Downloaded model artifacts (keep placeholder)
 models/*
 !models/.gitkeep
+
+extras/
