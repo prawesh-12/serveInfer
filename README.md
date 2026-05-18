@@ -1,61 +1,62 @@
 # Local multi-process inference runtime
 
+This repository provides an on-device, multi-process inference runtime, especially for GGUF models (for example, Phi-3). It combines:
+
 - **C++ control plane**: `supervisor`, `model-cache`, `inference-worker`
 - **Node.js API plane**: `api-server` (worker-pool + HTTP/SSE)
 - **Node.js shell plane**: `shell-app` (scheduler + two MFEs)
-- **Single command orchestration**: `make run`
 
-This project runs an on device GGUF model (for example: Phi-3), exposes inference APIs and serves two browser UIs:
+It exposes local inference APIs and serves two browser UIs:
 
 - **Document Q&A**
 - **Meeting Summariser**
 
 ---
 
-## 1) Repository layout
+## 1) Project Structure
 
 ```text
 server_infer/
-├── CMakeLists.txt
-├── Makefile
-├── .env.example
-├── api-server/
-│   ├── server.js
-│   ├── ipc.js
-│   ├── routes/infer.js
-│   └── package.json
-├── inference-worker/
-│   ├── main.cpp
-│   ├── worker.h
-│   ├── worker.cpp
-│   ├── inferEngine.h
-│   ├── inferEngine.cpp
-│   ├── CMakeLists.txt
-│   └── llama-src/          # vendored llama.cpp source tree (thin-wrapper approach)
-├── model-cache/
-│   ├── main.cpp
-│   ├── model_cache.h
-│   └── model_cache.cpp
-├── supervisor/
-│   ├── main.cpp
-│   ├── supervisor.h
-│   └── supervisor.cpp
-├── shell-app/
-│   ├── server.js
-│   ├── scheduler.js
-│   ├── edgeAgentService.js
-│   ├── package.json
-│   └── public/
-│       ├── shell.html
-│       ├── mfe-doc-qa.html
-│       ├── mfe-meeting-summary.html
-│       ├── css/styles.css
-│       └── js/*.js
-├── ipc/paths.h
+├── CMakeLists.txt               # Root CMake entrypoint for C++ targets
+├── Makefile                     # Convenience commands (run/build/start/stop/restart)
+├── .env.example                 
+├── api-server/                  # Node.js API service exposed to clients
+│   ├── server.js                # Express bootstrap + health route + supervisor notify listener
+│   ├── ipc.js                   # WorkerPool (worker socket management + request dispatch)
+│   ├── routes/infer.js          # /infer and /infer/stream route handlers
+│   └── package.json             # API server dependencies/scripts
+├── inference-worker/            # C++ inference worker process
+│   ├── main.cpp                 # Worker entrypoint + env parsing + socket server startup
+│   ├── worker.h                 # Worker interface and request/response contracts
+│   ├── worker.cpp               # Worker socket loop + request handling
+│   ├── inferEngine.h            # Inference engine interface
+│   ├── inferEngine.cpp          # llama-backed generation + streaming implementation
+│   ├── CMakeLists.txt           # Worker build config (llama integration flags)
+│   └── llama-src/               # Vendored llama.cpp source tree (thin-wrapper approach)
+├── model-cache/                 # C++ model cache process (shared memory owner)
+│   ├── main.cpp                 # Model-cache entrypoint
+│   ├── model_cache.h            # Shared model header/cache API
+│   └── model_cache.cpp          # GGUF load + checksum + /dev/shm management
+├── supervisor/                  # C++ process supervisor for runtime children
+│   ├── main.cpp                 # Supervisor CLI + startup wiring
+│   ├── supervisor.h             # Supervisor class/process model definitions
+│   └── supervisor.cpp           # Spawn/monitor/restart logic + crash notifications
+├── shell-app/                   # Node.js shell app + scheduler + MFE hosting
+│   ├── server.js                # Shell routes (/api/* + static UI pages)
+│   ├── scheduler.js             # Priority queue + fairness + timeout/cancel handling
+│   ├── edgeAgentService.js      # Adapter between scheduler and api-server
+│   ├── package.json             # Shell app dependencies/scripts
+│   └── public/                  # Static frontend assets
+│       ├── shell.html           # Shell dashboard embedding both MFEs
+│       ├── mfe-doc-qa.html      # Document Q&A micro-frontend
+│       ├── mfe-meeting-summary.html # Meeting Summariser micro-frontend
+│       ├── css/styles.css       # Shared frontend styles
+│       └── js/*.js              # Frontend behavior scripts
+├── ipc/paths.h                  # Shared IPC paths/constants for C++ services
 └── scripts/
-    ├── build.sh
-    ├── start.sh
-    └── stop.sh
+    ├── build.sh                 # Build C++ binaries + install Node dependencies
+    ├── start.sh                 # Start supervisor and shell-app with env wiring
+    └── stop.sh                  # Stop runtime processes and clean IPC artifacts
 ```
 
 ---
@@ -113,7 +114,7 @@ Qualcomm NPU and Apple ANE fallback branches are intentionally not implemented i
 
 The shell scheduler (`shell-app/scheduler.js`) enforces:
 
-- Global max concurrent slots (`maxSlots`, default 4)
+- Global max concurrent slots (`maxSlots`, default `EDGE_WORKER_COUNT`, usually 2)
 - Per-MFE (Micro-Frontends) concurrent cap (`maxPerMfe`, default 2)
 - Priority queue: `high`, `normal`, `low`
 - Aging boost every `agingMs` (default 15s)
@@ -155,6 +156,7 @@ Headers:
 
 - `X-Inference-Device`
 - `X-Inference-Degraded`
+- `X-Latency-Mode`
 
 ### `GET /infer/stream`
 
@@ -162,6 +164,10 @@ Query: `prompt`, `requestId`, `mfeId`
 
 Server-Sent Events:
 
+- `queued`
+- `started`
+- `cancelled`
+- `timeout`
 - `token`
 - `done`
 - `error`
@@ -185,6 +191,7 @@ App routes:
 - `POST /api/cancel`
 - `GET /api/queue-status`
 - `GET /api/health`
+- `GET /api/agent-health`
 
 ---
 
@@ -207,12 +214,19 @@ EDGE_SEED=42
 
 Related scheduler envs (optional, read by shell-app):
 
-- `EDGE_MAX_SLOTS` (default 4)
+- `EDGE_MAX_SLOTS` (default `EDGE_WORKER_COUNT`)
 - `EDGE_MAX_PER_MFE` (default 2)
 - `EDGE_MAX_QUEUE` (default 20)
 - `EDGE_AGING_MS` (default 15000)
 - `EDGE_QUEUE_TIMEOUT_MS` (default 30000)
 - `EDGE_DEFAULT_JOB_MS` (default 8000)
+
+Other optional runtime envs:
+
+- `EDGE_API_BASE` (internal shell-app target, set by `start.sh`)
+- `EDGE_LAST_REQUEST_PATH` (default `/tmp/edge-last-request.json`)
+- `EDGE_WORKER_SOCKET_PREFIX` (default `/tmp/edge-worker-`)
+- `EDGE_API_NOTIFY_SOCK` (default `/tmp/edge-api-notify.sock`)
 
 ---
 
