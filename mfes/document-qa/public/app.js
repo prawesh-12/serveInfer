@@ -1,3 +1,5 @@
+const API_BASE = (window.MFE_CONFIG && window.MFE_CONFIG.shellApiBase) || "";
+
 const promptEl = document.getElementById("prompt");
 const askBtn = document.getElementById("askBtn");
 const prefetchBtn = document.getElementById("prefetchBtn");
@@ -14,6 +16,10 @@ const queueMetaEl = document.getElementById("queueMeta");
 let currentRequestId = null;
 let currentSource = null;
 let hasChatContent = false;
+
+function apiUrl(path) {
+    return `${API_BASE}${path}`;
+}
 
 function makeId() {
     return (
@@ -58,8 +64,8 @@ function logEvent(type, requestId, payload = {}) {
 async function refreshHealth() {
     try {
         const [schedulerRes, agentRes] = await Promise.all([
-            fetch("/api/health"),
-            fetch("/api/agent-health"),
+            fetch(apiUrl("/api/health")),
+            fetch(apiUrl("/api/agent-health")),
         ]);
         if (!schedulerRes.ok || !agentRes.ok) {
             throw new Error("offline");
@@ -71,7 +77,7 @@ async function refreshHealth() {
         docHealthEl.textContent = `ready ${ready}, queue ${scheduler.queueLength || 0}`;
         docHealthEl.className = ready > 0 ? "status-pill ok" : "status-pill bad";
     } catch {
-        docHealthEl.textContent = "agent offline";
+        docHealthEl.textContent = "shell offline";
         docHealthEl.className = "status-pill bad";
     }
 }
@@ -92,7 +98,7 @@ function submit(priority, rawPrompt, options = {}) {
     appendMessage("msg-user", `You (${priority.toUpperCase()}, ${shortId(requestId)}): ${prompt}`);
     const responseEl = appendMessage("msg-bot", "Assistant: ");
     lastMetaEl.textContent = `running ${shortId(requestId)}`;
-    logEvent("submitted", requestId, { priority, transport: "sse" });
+    logEvent("submitted", requestId, { priority, transport: "sse", shell: API_BASE });
 
     const params = new URLSearchParams({
         requestId,
@@ -101,7 +107,7 @@ function submit(priority, rawPrompt, options = {}) {
         priority,
     });
 
-    const source = new EventSource(`/api/stream?${params.toString()}`);
+    const source = new EventSource(apiUrl(`/api/stream?${params.toString()}`));
     currentSource = source;
 
     source.addEventListener("queued", (event) => {
@@ -173,7 +179,7 @@ promptEl.addEventListener("keydown", (event) => {
 cancelBtn.addEventListener("click", async () => {
     if (!currentRequestId) return;
     closeCurrentSource();
-    await fetch("/api/cancel", {
+    await fetch(apiUrl("/api/cancel"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: currentRequestId }),

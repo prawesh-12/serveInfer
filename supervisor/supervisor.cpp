@@ -169,7 +169,7 @@ bool Supervisor::startModelCache() {
   ProcessInfo info;
   info.pid = pid;
   info.type = ProcessType::kModelCache;
-  info.crashLog = EdgeIPC::CRASH_LOG;
+  info.crashLog = EdgeIPC::crashLog();
   info.command = args;
   processesByPid_[pid] = std::move(info);
   std::cerr << "[supervisor] started model-cache pid=" << pid << '\n';
@@ -227,7 +227,7 @@ bool Supervisor::startApiServer() {
   info.pid = pid;
   info.type = ProcessType::kApiServer;
   info.socketPath = config_.apiNotifySocketPath;
-  info.crashLog = EdgeIPC::CRASH_LOG;
+  info.crashLog = EdgeIPC::crashLog();
   info.command = args;
   processesByPid_[pid] = std::move(info);
   std::cerr << "[supervisor] started api-server pid=" << pid << '\n';
@@ -267,7 +267,7 @@ bool Supervisor::startWorker(int workerId) {
   info.type = ProcessType::kWorker;
   info.workerId = workerId;
   info.socketPath = EdgeIPC::workerSock(workerId);
-  info.crashLog = EdgeIPC::CRASH_LOG;
+  info.crashLog = EdgeIPC::crashLog();
   info.command = args;
   processesByPid_[pid] = std::move(info);
   workerPidById_[workerId] = pid;
@@ -461,7 +461,7 @@ void Supervisor::drainSupervisorSocket() {
 }
 
 void Supervisor::writeCrashLog(const ProcessInfo& info, int status, const std::string& reason) const {
-  std::ofstream out(info.crashLog.empty() ? EdgeIPC::CRASH_LOG : info.crashLog, std::ios::app);
+  std::ofstream out(info.crashLog.empty() ? EdgeIPC::crashLog() : info.crashLog, std::ios::app);
   if (!out.is_open()) {
     return;
   }
@@ -471,7 +471,7 @@ void Supervisor::writeCrashLog(const ProcessInfo& info, int status, const std::s
 }
 
 void Supervisor::writeModelConfig() const {
-  std::ofstream out(EdgeIPC::MODEL_CONFIG, std::ios::trunc);
+  std::ofstream out(EdgeIPC::modelConfigPath(), std::ios::trunc);
   if (!out.is_open()) {
     return;
   }
@@ -481,7 +481,7 @@ void Supervisor::writeModelConfig() const {
 }
 
 bool Supervisor::crashLimitOpenFromDisk(const ProcessInfo& info) const {
-  std::ifstream in(info.crashLog.empty() ? EdgeIPC::CRASH_LOG : info.crashLog);
+  std::ifstream in(info.crashLog.empty() ? EdgeIPC::crashLog() : info.crashLog);
   if (!in.is_open()) {
     return false;
   }

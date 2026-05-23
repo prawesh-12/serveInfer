@@ -2,9 +2,10 @@
 
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
+const { requiredEnv } = require('../../config/env');
 const { WorkerPoolError } = require('../ipc');
 
-const LAST_REQUEST_PATH = process.env.EDGE_LAST_REQUEST_PATH || '/tmp/edge-last-request.json';
+const LAST_REQUEST_PATH = requiredEnv('EDGE_LAST_REQUEST_PATH');
 
 function sendSse(res, event, payload) {
   res.write(`event: ${event}\n`);

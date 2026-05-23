@@ -1,18 +1,40 @@
 #pragma once
 
+#include <cstdlib>
 #include <string>
 
 namespace EdgeIPC {
-inline const std::string SUPERVISOR_SOCK = "/tmp/edge-supervisor.sock";
-inline const std::string API_NOTIFY_SOCK = "/tmp/edge-api-notify.sock";
-inline const std::string WORKER_SOCK_PREFIX = "/tmp/edge-worker-";
-inline const std::string SHM_NAME = "/edge-model-weights";
-inline const std::string CRASH_LOG = "/tmp/edge-crash.log";
-inline const std::string MODEL_CONFIG = "/tmp/edge-model-config.json";
-inline const std::string LAST_REQUEST = "/tmp/edge-last-request.json";
+inline std::string envValue(const char* name) {
+  const char* value = std::getenv(name);
+  return value == nullptr ? std::string{} : std::string(value);
+}
+
+inline std::string supervisorSock() {
+  return envValue("EDGE_SUPERVISOR_SOCK");
+}
+
+inline std::string apiNotifySock() {
+  return envValue("EDGE_API_NOTIFY_SOCK");
+}
+
+inline std::string workerSockPrefix() {
+  return envValue("EDGE_WORKER_SOCKET_PREFIX");
+}
+
+inline std::string shmName() {
+  return envValue("EDGE_SHM_NAME");
+}
+
+inline std::string crashLog() {
+  return envValue("EDGE_CRASH_LOG");
+}
+
+inline std::string modelConfigPath() {
+  return envValue("EDGE_MODEL_CONFIG_PATH");
+}
 
 inline std::string workerSock(int id) {
-  return WORKER_SOCK_PREFIX + std::to_string(id) + ".sock";
+  return workerSockPrefix() + std::to_string(id) + ".sock";
 }
 
 inline std::string shmMetaName(const std::string& shmName) {

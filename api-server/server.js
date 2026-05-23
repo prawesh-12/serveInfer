@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const express = require('express');
+const { numberEnv, requiredEnv } = require('../config/env');
 const { WorkerPool } = require('./ipc');
 const { registerInferRoutes } = require('./routes/infer');
 
@@ -117,12 +118,13 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
 }
 
 const args = parseArgs(process.argv);
-const port = Number(args.port || process.env.EDGE_API_PORT || 11434);
-const workerCount = Number(process.env.EDGE_WORKER_COUNT || 2);
-const workerSocketPrefix = process.env.EDGE_WORKER_SOCKET_PREFIX || '/tmp/edge-worker-';
+const port = Number(args.port || numberEnv('EDGE_API_PORT'));
+const workerCount = numberEnv('EDGE_WORKER_COUNT');
+const workerSocketPrefix = requiredEnv('EDGE_WORKER_SOCKET_PREFIX');
+const workerConnectTimeoutMs = numberEnv('EDGE_WORKER_CONNECT_TIMEOUT_MS');
 const supervisorSocketPath =
-  args['supervisor-socket'] || process.env.EDGE_API_NOTIFY_SOCK || '/tmp/edge-api-notify.sock';
-const logger = createLogger(process.env.EDGE_LOG_LEVEL);
+  args['supervisor-socket'] || requiredEnv('EDGE_API_NOTIFY_SOCK');
+const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -130,6 +132,7 @@ app.use(express.json({ limit: '2mb' }));
 const workerPool = new WorkerPool({
   workerCount,
   workerSocketPrefix,
+  connectTimeoutMs: workerConnectTimeoutMs,
 });
 
 registerInferRoutes(app, workerPool);

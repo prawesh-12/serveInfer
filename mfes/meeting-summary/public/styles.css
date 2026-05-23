@@ -12,21 +12,16 @@ body {
 }
 
 button,
-input,
 textarea {
     font: inherit;
 }
 
-button,
-a {
-    border-radius: 6px;
-}
-
 button {
+    min-height: 40px;
     border: 1px solid #b8c2d3;
+    border-radius: 6px;
     background: #ffffff;
     color: #182635;
-    min-height: 40px;
     padding: 9px 12px;
     cursor: pointer;
 }
@@ -41,39 +36,24 @@ button:disabled {
     opacity: 0.5;
 }
 
-a {
-    color: #1d4ed8;
-    text-decoration: none;
-}
-
-a:hover {
-    text-decoration: underline;
-}
-
-.shell-page,
-.docqa-page,
 .meeting-page {
     min-height: 100vh;
     padding: 24px;
 }
 
-.app-header,
 .mfe-header,
 .panel-header,
-.input-row,
 .action-row {
     display: flex;
     align-items: center;
     gap: 12px;
 }
 
-.app-header,
 .mfe-header {
     justify-content: space-between;
     margin-bottom: 18px;
 }
 
-.app-header h1,
 .mfe-header h2 {
     margin: 0;
     font-size: 28px;
@@ -89,26 +69,6 @@ a:hover {
     text-transform: uppercase;
 }
 
-.nav-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.nav-actions a,
-.panel-header a {
-    border: 1px solid #c9d3e3;
-    background: #ffffff;
-    padding: 9px 12px;
-}
-
-.shell-grid {
-    display: grid;
-    grid-template-columns: minmax(280px, 360px) minmax(360px, 1fr) minmax(360px, 1fr);
-    gap: 14px;
-    min-height: calc(100vh - 118px);
-}
-
 .panel {
     border: 1px solid #d8e0ec;
     border-radius: 8px;
@@ -122,7 +82,6 @@ a:hover {
     margin-bottom: 12px;
 }
 
-.panel-header h2,
 .panel-header h3 {
     margin: 0;
     font-size: 17px;
@@ -133,87 +92,11 @@ a:hover {
     font-size: 13px;
 }
 
-.diagnostics-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-.metric-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-}
-
-.metric {
-    border: 1px solid #e0e7f0;
-    border-radius: 6px;
-    background: #f8fafc;
-    padding: 12px;
-}
-
-.metric span {
-    display: block;
-    color: #64748b;
-    font-size: 12px;
-}
-
-.metric strong {
-    display: block;
-    margin-top: 4px;
-    font-size: 20px;
-}
-
-.checklist {
-    margin-top: 16px;
-}
-
-.checklist h3 {
-    margin: 0 0 8px;
-    font-size: 15px;
-}
-
-.checklist ul {
-    margin: 0;
-    padding-left: 18px;
-    color: #334155;
-    font-size: 14px;
-    line-height: 1.5;
-}
-
-.json-view {
-    flex: 1;
-    min-height: 160px;
-    margin: 16px 0 0;
-    overflow: auto;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    background: #111827;
-    color: #d1fae5;
-    padding: 12px;
-    font-size: 12px;
-}
-
-.mfe-frame-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-iframe {
-    width: 100%;
-    flex: 1;
-    min-height: 620px;
-    border: 1px solid #d8e0ec;
-    border-radius: 6px;
-    background: #ffffff;
-}
-
 .status-pill {
+    min-width: 116px;
     border: 1px solid #cbd5e1;
     border-radius: 999px;
     background: #f8fafc;
-    min-width: 116px;
     padding: 7px 10px;
     color: #475569;
     text-align: center;
@@ -232,16 +115,13 @@ iframe {
     color: #991b1b;
 }
 
-.input-row {
-    align-items: stretch;
-}
-
-.input-row input {
-    flex: 1;
-    min-width: 180px;
+textarea {
+    width: 100%;
+    min-height: 150px;
+    resize: vertical;
     border: 1px solid #c9d3e3;
     border-radius: 6px;
-    padding: 10px 12px;
+    padding: 12px;
 }
 
 .action-row {
@@ -250,17 +130,13 @@ iframe {
 }
 
 .queue-banner {
-    display: none;
+    display: block;
     margin-top: 12px;
     border: 1px solid #bfdbfe;
     border-radius: 6px;
     background: #eff6ff;
     padding: 10px 12px;
     color: #1e3a8a;
-}
-
-#cancelBtn {
-    display: none;
 }
 
 .split-grid {
@@ -286,27 +162,6 @@ iframe {
     color: #64748b;
 }
 
-.msg-user,
-.msg-bot,
-.msg-error {
-    border-bottom: 1px solid #e7edf6;
-    padding: 9px 0;
-}
-
-.msg-user {
-    color: #1d4ed8;
-    font-weight: 700;
-}
-
-.msg-bot {
-    color: #182635;
-}
-
-.msg-error {
-    color: #b91c1c;
-    font-weight: 700;
-}
-
 .event-item {
     border-left: 3px solid #cbd5e1;
     padding: 7px 0 7px 10px;
@@ -330,41 +185,19 @@ iframe {
     border-left-color: #ef4444;
 }
 
-.meeting-page textarea {
-    width: 100%;
-    min-height: 150px;
-    resize: vertical;
-    border: 1px solid #c9d3e3;
-    border-radius: 6px;
-    padding: 12px;
-}
-
 @media (max-width: 1180px) {
-    .shell-grid,
     .split-grid {
         grid-template-columns: 1fr;
-    }
-
-    iframe {
-        min-height: 520px;
     }
 }
 
 @media (max-width: 720px) {
-    .shell-page,
-    .docqa-page,
     .meeting-page {
         padding: 16px;
     }
 
-    .app-header,
-    .mfe-header,
-    .input-row {
+    .mfe-header {
         align-items: stretch;
         flex-direction: column;
-    }
-
-    .metric-grid {
-        grid-template-columns: 1fr;
     }
 }

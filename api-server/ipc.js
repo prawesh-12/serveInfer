@@ -15,9 +15,18 @@ class WorkerPoolError extends Error {
 
 class WorkerPool {
   constructor(options = {}) {
-    this.workerCount = Number(options.workerCount ?? 2);
-    this.workerSocketPrefix = options.workerSocketPrefix ?? '/tmp/edge-worker-';
-    this.connectTimeoutMs = Number(options.connectTimeoutMs ?? 3000);
+    this.workerCount = Number(options.workerCount);
+    this.workerSocketPrefix = options.workerSocketPrefix;
+    this.connectTimeoutMs = Number(options.connectTimeoutMs);
+    if (!Number.isInteger(this.workerCount) || this.workerCount <= 0) {
+      throw new Error('WorkerPool requires a positive workerCount');
+    }
+    if (!this.workerSocketPrefix) {
+      throw new Error('WorkerPool requires workerSocketPrefix');
+    }
+    if (!Number.isFinite(this.connectTimeoutMs) || this.connectTimeoutMs <= 0) {
+      throw new Error('WorkerPool requires a positive connectTimeoutMs');
+    }
     this.workers = new Map();
     this.inFlight = new Map();
     this.startTime = Date.now();

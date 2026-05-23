@@ -38,9 +38,9 @@ void printUsage(const char* argv0) {
 
 int main(int argc, char** argv) {
   SupervisorConfig config;
-  config.shmName = EdgeIPC::SHM_NAME;
-  config.supervisorSocketPath = EdgeIPC::SUPERVISOR_SOCK;
-  config.apiNotifySocketPath = EdgeIPC::API_NOTIFY_SOCK;
+  config.shmName = EdgeIPC::shmName();
+  config.supervisorSocketPath = EdgeIPC::supervisorSock();
+  config.apiNotifySocketPath = EdgeIPC::apiNotifySock();
 
   if (const char* workerEnv = std::getenv("EDGE_WORKER_COUNT")) {
     parseIntArg(workerEnv, config.workerCount);
@@ -112,6 +112,33 @@ int main(int argc, char** argv) {
   if (config.modelPath.empty()) {
     std::cerr << "--model-path is required (or set EDGE_MODEL_PATH)\n";
     printUsage(argv[0]);
+    return 1;
+  }
+  if (config.shmName.empty()) {
+    std::cerr << "--shm-name is required (or set EDGE_SHM_NAME)\n";
+    printUsage(argv[0]);
+    return 1;
+  }
+  if (config.supervisorSocketPath.empty()) {
+    std::cerr << "--supervisor-socket is required (or set EDGE_SUPERVISOR_SOCK)\n";
+    printUsage(argv[0]);
+    return 1;
+  }
+  if (config.apiNotifySocketPath.empty()) {
+    std::cerr << "--api-notify-socket is required (or set EDGE_API_NOTIFY_SOCK)\n";
+    printUsage(argv[0]);
+    return 1;
+  }
+  if (EdgeIPC::workerSockPrefix().empty()) {
+    std::cerr << "EDGE_WORKER_SOCKET_PREFIX is required\n";
+    return 1;
+  }
+  if (EdgeIPC::crashLog().empty()) {
+    std::cerr << "EDGE_CRASH_LOG is required\n";
+    return 1;
+  }
+  if (EdgeIPC::modelConfigPath().empty()) {
+    std::cerr << "EDGE_MODEL_CONFIG_PATH is required\n";
     return 1;
   }
 

@@ -1,3 +1,5 @@
+const API_BASE = (window.MFE_CONFIG && window.MFE_CONFIG.shellApiBase) || "";
+
 const transcriptEl = document.getElementById("transcript");
 const summariseBtn = document.getElementById("summariseBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -12,6 +14,10 @@ const streamQueueMetaEl = document.getElementById("streamQueueMeta");
 let currentRequestId = null;
 let source = null;
 let tokenCount = 0;
+
+function apiUrl(path) {
+    return `${API_BASE}${path}`;
+}
 
 function makeId() {
     return (
@@ -41,8 +47,8 @@ function logEvent(type, requestId, payload = {}) {
 async function refreshHealth() {
     try {
         const [schedulerRes, agentRes] = await Promise.all([
-            fetch("/api/health"),
-            fetch("/api/agent-health"),
+            fetch(apiUrl("/api/health")),
+            fetch(apiUrl("/api/agent-health")),
         ]);
         if (!schedulerRes.ok || !agentRes.ok) {
             throw new Error("offline");
@@ -54,7 +60,7 @@ async function refreshHealth() {
         streamHealthEl.textContent = `busy ${busy}, queue ${scheduler.queueLength || 0}`;
         streamHealthEl.className = "status-pill ok";
     } catch {
-        streamHealthEl.textContent = "agent offline";
+        streamHealthEl.textContent = "shell offline";
         streamHealthEl.className = "status-pill bad";
     }
 }
@@ -87,13 +93,13 @@ summariseBtn.addEventListener("click", async () => {
         priority: "high",
     });
 
-    setStatus("Connecting to SSE...");
+    setStatus("Connecting to shell SSE...");
     streamMetaEl.textContent = `stream ${shortId(currentRequestId)}`;
-    logEvent("submitted", currentRequestId, { priority: "high", transport: "sse" });
+    logEvent("submitted", currentRequestId, { priority: "high", transport: "sse", shell: API_BASE });
     stopBtn.disabled = false;
     summariseBtn.disabled = true;
 
-    source = new EventSource(`/api/stream?${params.toString()}`);
+    source = new EventSource(apiUrl(`/api/stream?${params.toString()}`));
 
     source.addEventListener("queued", (event) => {
         const payload = JSON.parse(event.data);
@@ -146,7 +152,7 @@ summariseBtn.addEventListener("click", async () => {
 
 stopBtn.addEventListener("click", async () => {
     if (!currentRequestId) return;
-    await fetch("/api/cancel", {
+    await fetch(apiUrl("/api/cancel"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: currentRequestId }),

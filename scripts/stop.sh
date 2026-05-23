@@ -2,18 +2,31 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-STATE_DIR="/tmp/edge-runtime"
 
+load_env_file() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$file"
+    set +a
+  fi
+}
+
+load_env_file "$ROOT/.env.example"
 ENV_FILE="$ROOT/.env"
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$ENV_FILE"
-  set +a
-fi
+load_env_file "$ENV_FILE"
 
-API_PORT="${EDGE_API_PORT:-11434}"
-SHELL_PORT="${EDGE_SHELL_PORT:-3000}"
+STATE_DIR="$EDGE_STATE_DIR"
+API_PORT="$EDGE_API_PORT"
+SHELL_PORT="$EDGE_SHELL_PORT"
+STATUS_DASHBOARD_PORT="$EDGE_STATUS_DASHBOARD_PORT"
+MEETING_MFE_PORT="$EDGE_MEETING_MFE_PORT"
+DOC_QA_MFE_PORT="$EDGE_DOC_QA_MFE_PORT"
+SHM_NAME="$EDGE_SHM_NAME"
+SUPERVISOR_SOCK="$EDGE_SUPERVISOR_SOCK"
+API_NOTIFY_SOCK="$EDGE_API_NOTIFY_SOCK"
+WORKER_SOCKET_PREFIX="$EDGE_WORKER_SOCKET_PREFIX"
 
 stop_from_pidfile() {
   local label="$1"
@@ -47,15 +60,24 @@ find_runtime_pids() {
     index($0, root "/build/supervisor/edge-supervisor") > 0 ||
     index($0, root "/build/model-cache/edge-model-cache") > 0 ||
     index($0, root "/build/inference-worker/edge-inference-worker") > 0 ||
-    index($0, "node " root "/api-server/server.js") > 0 ||
-    index($0, "node " root "/shell-app/server.js") > 0 ||
-    index($0, "node api-server/server.js") > 0 ||
-    index($0, "node ./api-server/server.js") > 0 ||
-    index($0, "node shell-app/server.js") > 0 ||
-    index($0, "node ./shell-app/server.js") > 0 {
-      print $1
-    }
-  '
+	    index($0, "node " root "/api-server/server.js") > 0 ||
+	    index($0, "node " root "/shell-app/server.js") > 0 ||
+	    index($0, "node " root "/system-dashboard/server.js") > 0 ||
+	    index($0, "node " root "/mfes/meeting-summary/server.js") > 0 ||
+	    index($0, "node " root "/mfes/document-qa/server.js") > 0 ||
+	    index($0, "node api-server/server.js") > 0 ||
+	    index($0, "node ./api-server/server.js") > 0 ||
+	    index($0, "node shell-app/server.js") > 0 ||
+	    index($0, "node ./shell-app/server.js") > 0 ||
+	    index($0, "node system-dashboard/server.js") > 0 ||
+	    index($0, "node ./system-dashboard/server.js") > 0 ||
+	    index($0, "node mfes/meeting-summary/server.js") > 0 ||
+	    index($0, "node ./mfes/meeting-summary/server.js") > 0 ||
+	    index($0, "node mfes/document-qa/server.js") > 0 ||
+	    index($0, "node ./mfes/document-qa/server.js") > 0 {
+	      print $1
+	    }
+	  '
 }
 
 find_port_pids() {
@@ -84,6 +106,9 @@ kill_pid_list() {
 }
 
 stop_from_pidfile "shell-app" "$STATE_DIR/shell.pid"
+stop_from_pidfile "system dashboard" "$STATE_DIR/status-dashboard.pid"
+stop_from_pidfile "meeting-summary MFE" "$STATE_DIR/meeting-mfe.pid"
+stop_from_pidfile "document Q&A MFE" "$STATE_DIR/doc-qa-mfe.pid"
 stop_from_pidfile "edge-supervisor" "$STATE_DIR/supervisor.pid"
 
 mapfile -t runtime_pids < <(find_runtime_pids)
@@ -107,12 +132,15 @@ fi
 
 mapfile -t port_pids < <(
   {
-    find_port_pids "$API_PORT"
-    find_port_pids "$SHELL_PORT"
-  } | sort -u
+	    find_port_pids "$API_PORT"
+	    find_port_pids "$SHELL_PORT"
+	    find_port_pids "$STATUS_DASHBOARD_PORT"
+	    find_port_pids "$MEETING_MFE_PORT"
+	    find_port_pids "$DOC_QA_MFE_PORT"
+	  } | sort -u
 )
 if [[ "${#port_pids[@]}" -gt 0 ]]; then
-  echo "[stop] stopping listeners on ports $API_PORT/$SHELL_PORT: ${port_pids[*]}"
+  echo "[stop] stopping listeners on ports $API_PORT/$SHELL_PORT/$STATUS_DASHBOARD_PORT/$MEETING_MFE_PORT/$DOC_QA_MFE_PORT: ${port_pids[*]}"
   kill_pid_list TERM "${port_pids[@]}"
   sleep 1
 
@@ -129,7 +157,7 @@ if [[ "${#port_pids[@]}" -gt 0 ]]; then
   fi
 fi
 
-rm -f /tmp/edge-supervisor.sock /tmp/edge-api-notify.sock /tmp/edge-worker-*.sock
-rm -f /dev/shm/edge-model-weights /dev/shm/edge-model-weights.meta
+rm -f "$SUPERVISOR_SOCK" "$API_NOTIFY_SOCK" "${WORKER_SOCKET_PREFIX}"*.sock
+rm -f "/dev/shm/${SHM_NAME#/}" "/dev/shm/${SHM_NAME#/}.meta"
 
 echo "[stop] runtime processes stopped."

@@ -56,9 +56,10 @@ int main(int argc, char** argv) {
   WorkerConfig config;
   config.workerId = 0;
   config.socketPath = EdgeIPC::workerSock(config.workerId);
-  config.supervisorSocketPath = EdgeIPC::SUPERVISOR_SOCK;
-  config.shmName = EdgeIPC::SHM_NAME;
+  config.supervisorSocketPath = EdgeIPC::supervisorSock();
+  config.shmName = EdgeIPC::shmName();
   config.heartbeatIntervalMs = 50;
+  bool socketPathProvided = false;
   if (const char* modelPath = std::getenv("EDGE_MODEL_PATH")) {
     config.modelPath = modelPath;
   }
@@ -103,6 +104,7 @@ int main(int argc, char** argv) {
     }
     if (takeValue("--socket-path", value)) {
       config.socketPath = value;
+      socketPathProvided = true;
       continue;
     }
     if (takeValue("--supervisor-socket", value)) {
@@ -168,8 +170,28 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (config.socketPath.empty()) {
+  if (!socketPathProvided) {
     config.socketPath = EdgeIPC::workerSock(config.workerId);
+  }
+  if (!socketPathProvided && EdgeIPC::workerSockPrefix().empty()) {
+    std::cerr << "--socket-path is required (or set EDGE_WORKER_SOCKET_PREFIX)\n";
+    return 1;
+  }
+  if (config.modelPath.empty()) {
+    std::cerr << "--model-path is required (or set EDGE_MODEL_PATH)\n";
+    return 1;
+  }
+  if (config.socketPath.empty()) {
+    std::cerr << "--socket-path is required (or set EDGE_WORKER_SOCKET_PREFIX)\n";
+    return 1;
+  }
+  if (config.supervisorSocketPath.empty()) {
+    std::cerr << "--supervisor-socket is required (or set EDGE_SUPERVISOR_SOCK)\n";
+    return 1;
+  }
+  if (config.shmName.empty()) {
+    std::cerr << "--shm-name is required (or set EDGE_SHM_NAME)\n";
+    return 1;
   }
 
   Worker worker(config);

@@ -1,8 +1,8 @@
 'use strict';
 
-const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
+const { numberEnv, requiredEnv } = require('../config/env');
 const { getEdgeAgentService } = require('./edgeAgentService');
 
 const LOG_LEVELS = {
@@ -27,12 +27,30 @@ function createLogger(rawLevel) {
 
 const app = express();
 const service = getEdgeAgentService();
-const port = Number(process.env.EDGE_SHELL_PORT || 3000);
-const publicDir = path.join(__dirname, 'public');
-const logger = createLogger(process.env.EDGE_LOG_LEVEL);
+const port = numberEnv('EDGE_SHELL_PORT');
+const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
+const allowedMfeOrigins = new Set(
+  requiredEnv('EDGE_ALLOWED_MFE_ORIGINS')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedMfeOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(publicDir));
 
 function makeRequestId() {
   return crypto.randomUUID();
@@ -46,15 +64,18 @@ function normalizePriority(input) {
 }
 
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'shell.html'));
-});
-
-app.get('/mfe-doc-qa', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'mfe-doc-qa.html'));
-});
-
-app.get('/mfe-meeting-summary', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'mfe-meeting-summary.html'));
+  res.json({
+    service: 'shell-app',
+    role: 'singleton_scheduler_facade',
+    api: {
+      infer: '/api/infer',
+      stream: '/api/stream',
+      cancel: '/api/cancel',
+      queueStatus: '/api/queue-status',
+      health: '/api/health',
+      agentHealth: '/api/agent-health',
+    },
+  });
 });
 
 app.post('/api/infer', async (req, res) => {

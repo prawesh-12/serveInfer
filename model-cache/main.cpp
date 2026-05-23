@@ -22,7 +22,7 @@ void printUsage(const char* argv0) {
 
 int main(int argc, char** argv) {
   ModelCacheConfig config;
-  config.shmName = EdgeIPC::SHM_NAME;
+  config.shmName = EdgeIPC::shmName();
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -50,6 +50,11 @@ int main(int argc, char** argv) {
 
   if (config.modelPath.empty()) {
     std::cerr << "--model-path is required\n";
+    printUsage(argv[0]);
+    return 1;
+  }
+  if (config.shmName.empty()) {
+    std::cerr << "--shm-name is required (or set EDGE_SHM_NAME)\n";
     printUsage(argv[0]);
     return 1;
   }

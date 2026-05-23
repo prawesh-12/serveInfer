@@ -1,19 +1,19 @@
 'use strict';
 
+const { numberEnv, requiredEnv } = require('../config/env');
 const { Scheduler } = require('./scheduler');
 
 class EdgeAgentService {
   constructor() {
-    this.apiBase = process.env.EDGE_API_BASE || 'http://127.0.0.1:11434';
-    const workerCount = Number(process.env.EDGE_WORKER_COUNT || 2);
-    const maxSlots = Number(process.env.EDGE_MAX_SLOTS || workerCount || 4);
+    this.apiBase = requiredEnv('EDGE_API_BASE');
+    const maxSlots = numberEnv('EDGE_MAX_SLOTS');
     this.scheduler = new Scheduler({
       maxSlots,
-      maxPerMfe: Number(process.env.EDGE_MAX_PER_MFE || 2),
-      maxQueue: Number(process.env.EDGE_MAX_QUEUE || 20),
-      agingMs: Number(process.env.EDGE_AGING_MS || 15_000),
-      queueTimeoutMs: Number(process.env.EDGE_QUEUE_TIMEOUT_MS || 30_000),
-      defaultDurationMs: Number(process.env.EDGE_DEFAULT_JOB_MS || 8_000),
+      maxPerMfe: numberEnv('EDGE_MAX_PER_MFE'),
+      maxQueue: numberEnv('EDGE_MAX_QUEUE'),
+      agingMs: numberEnv('EDGE_AGING_MS'),
+      queueTimeoutMs: numberEnv('EDGE_QUEUE_TIMEOUT_MS'),
+      defaultDurationMs: numberEnv('EDGE_DEFAULT_JOB_MS'),
     });
   }
 
