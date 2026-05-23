@@ -128,6 +128,7 @@ class WorkerPool {
     });
 
     client.on('connect', () => {
+      clearTimeout(connectTimer);
       const payload = {
         type: 'infer',
         requestId,
@@ -319,6 +320,7 @@ class WorkerPool {
       });
 
       client.on('connect', () => {
+        clearTimeout(connectTimer);
         const payload = {
           type: 'infer',
           requestId,

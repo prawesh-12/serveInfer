@@ -417,11 +417,18 @@ void Worker::heartbeatLoop() {
 bool Worker::sendAll(int fd, const std::string& data) {
   std::size_t sent = 0;
   while (sent < data.size()) {
-    const ssize_t n = send(fd, data.data() + sent, data.size() - sent, 0);
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+    const ssize_t n = send(fd, data.data() + sent, data.size() - sent, flags);
     if (n < 0) {
       if (errno == EINTR) {
         continue;
       }
+      return false;
+    }
+    if (n == 0) {
       return false;
     }
     sent += static_cast<std::size_t>(n);

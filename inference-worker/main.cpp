@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
 
   Worker worker(config);
   gWorker = &worker;
+  std::signal(SIGPIPE, SIG_IGN);
   std::signal(SIGINT, signalHandler);
   std::signal(SIGTERM, signalHandler);
 
