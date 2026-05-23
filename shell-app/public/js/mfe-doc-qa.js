@@ -12,7 +12,7 @@ const lastMetaEl = document.getElementById("lastMeta");
 const queueMetaEl = document.getElementById("queueMeta");
 
 let currentRequestId = null;
-let queuePollTimer = null;
+let currentSource = null;
 let hasChatContent = false;
 
 function makeId() {
@@ -44,6 +44,7 @@ function appendMessage(cls, text) {
     div.textContent = text;
     chatEl.appendChild(div);
     chatEl.scrollTop = chatEl.scrollHeight;
+    return div;
 }
 
 function logEvent(type, requestId, payload = {}) {
@@ -52,10 +53,6 @@ function logEvent(type, requestId, payload = {}) {
     div.className = `event-item ${tone}`;
     div.innerHTML = `<strong>${type}</strong> req=${shortId(requestId)} ${JSON.stringify(payload)}`;
     eventsEl.prepend(div);
-}
-
-function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function refreshHealth() {
@@ -79,97 +76,86 @@ async function refreshHealth() {
     }
 }
 
-async function pollQueue(requestId) {
-    clearInterval(queuePollTimer);
-    queuePollTimer = setInterval(async () => {
-        try {
-            const res = await fetch(
-                `/api/queue-status?requestId=${encodeURIComponent(requestId)}`,
-            );
-            if (!res.ok) return;
-            const status = await res.json();
-            if (status.state === "queued") {
-                const eta = Math.ceil((status.estimatedWaitMs || 0) / 1000);
-                setQueue(`Queued: position ${status.position}, ETA ${eta}s`, true);
-                logEvent("queued", requestId, { position: status.position, eta });
-            } else if (status.state === "active") {
-                setQueue("Started: active inference slot in use", true);
-            } else {
-                setQueue("");
-                clearInterval(queuePollTimer);
-            }
-        } catch {
-            setQueue("Queue status unavailable", false);
-        }
-    }, 1000);
+function closeCurrentSource() {
+    if (currentSource) {
+        currentSource.close();
+        currentSource = null;
+    }
 }
 
-async function submit(priority, rawPrompt, options = {}) {
+function submit(priority, rawPrompt, options = {}) {
     const prompt = (rawPrompt || promptEl.value).trim();
     if (!prompt) return;
 
     const requestId = options.requestId || makeId();
     currentRequestId = requestId;
     appendMessage("msg-user", `You (${priority.toUpperCase()}, ${shortId(requestId)}): ${prompt}`);
+    const responseEl = appendMessage("msg-bot", "Assistant: ");
     lastMetaEl.textContent = `running ${shortId(requestId)}`;
-    logEvent("submitted", requestId, { priority });
-    pollQueue(requestId);
+    logEvent("submitted", requestId, { priority, transport: "sse" });
 
-    let response;
-    try {
-        response = await fetch("/api/infer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                requestId,
-                prompt,
-                mfeId: "doc-qa",
-                priority,
-            }),
-        });
-    } catch {
-        clearInterval(queuePollTimer);
-        setQueue("");
-        logEvent("error", requestId, { error: "shell_unreachable" });
-        appendMessage("msg-error", "Shell/API unreachable. Start the runtime and retry.");
-        lastMetaEl.textContent = "failed";
-        return;
-    }
-
-    clearInterval(queuePollTimer);
-    setQueue("");
-
-    if (response.status === 503) {
-        const payload = await response.json().catch(() => ({}));
-        const waitSecs = Number(payload.retryAfterSeconds || 2);
-        logEvent("error", requestId, payload);
-        if (!options.retried) {
-            appendMessage("msg-error", `Worker crashed. Retrying in ${waitSecs}s...`);
-            await delay(waitSecs * 1000);
-            await submit(priority, prompt, { requestId, retried: true });
-            return;
-        }
-        appendMessage("msg-error", "Worker crashed again. Please retry.");
-        lastMetaEl.textContent = "failed";
-        return;
-    }
-
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        logEvent("error", requestId, payload);
-        appendMessage("msg-error", `Request failed: ${payload.error || response.status}`);
-        lastMetaEl.textContent = "failed";
-        return;
-    }
-
-    const payload = await response.json();
-    logEvent("done", requestId, {
-        device: payload.device || "cpu",
-        degraded: Boolean(payload.degraded),
+    const params = new URLSearchParams({
+        requestId,
+        prompt,
+        mfeId: "doc-qa",
+        priority,
     });
-    appendMessage("msg-bot", `Assistant (${payload.device || "cpu"}): ${payload.result}`);
-    lastMetaEl.textContent = `done ${shortId(requestId)} on ${payload.device || "cpu"}`;
-    refreshHealth();
+
+    const source = new EventSource(`/api/stream?${params.toString()}`);
+    currentSource = source;
+
+    source.addEventListener("queued", (event) => {
+        const payload = JSON.parse(event.data);
+        const eta = Math.ceil((payload.estimatedWaitMs || 0) / 1000);
+        setQueue(`Queued: position ${payload.position}, ETA ${eta}s`, true);
+        logEvent("queued", requestId, { position: payload.position, eta });
+    });
+
+    source.addEventListener("started", () => {
+        setQueue("Started: active inference slot in use", true);
+        logEvent("started", requestId);
+    });
+
+    source.addEventListener("token", (event) => {
+        const payload = JSON.parse(event.data);
+        responseEl.textContent += payload.token || "";
+        chatEl.scrollTop = chatEl.scrollHeight;
+    });
+
+    source.addEventListener("done", (event) => {
+        const payload = JSON.parse(event.data);
+        logEvent("done", requestId, {
+            device: payload.device || "cpu",
+            degraded: Boolean(payload.degraded),
+        });
+        responseEl.textContent = `Assistant (${payload.device || "cpu"}): ${payload.result || responseEl.textContent.replace("Assistant: ", "")}`;
+        lastMetaEl.textContent = `done ${shortId(requestId)} on ${payload.device || "cpu"}`;
+        setQueue("");
+        source.close();
+        if (currentSource === source) {
+            currentSource = null;
+        }
+        refreshHealth();
+    });
+
+    source.addEventListener("error", (event) => {
+        let payload = {};
+        try {
+            payload = event.data ? JSON.parse(event.data) : {};
+        } catch {
+            payload = { error: "connection_closed" };
+        }
+        logEvent("error", requestId, payload);
+        responseEl.className = "msg-error";
+        responseEl.textContent = `Request failed: ${payload.error || "stream_failed"}`;
+        lastMetaEl.textContent = "failed";
+        setQueue("");
+        source.close();
+        if (currentSource === source) {
+            currentSource = null;
+        }
+        refreshHealth();
+    });
 }
 
 askBtn.addEventListener("click", () => submit("high"));
@@ -186,18 +172,19 @@ promptEl.addEventListener("keydown", (event) => {
 
 cancelBtn.addEventListener("click", async () => {
     if (!currentRequestId) return;
+    closeCurrentSource();
     await fetch("/api/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: currentRequestId }),
     }).catch(() => {});
-    clearInterval(queuePollTimer);
     setQueue("");
     logEvent("cancelled", currentRequestId, { reason: "user_cancelled" });
     appendMessage("msg-error", `Cancelled ${shortId(currentRequestId)}.`);
 });
 
 clearBtn.addEventListener("click", () => {
+    closeCurrentSource();
     hasChatContent = false;
     chatEl.textContent = "No requests yet.";
     chatEl.className = "scroll-box empty-state";
