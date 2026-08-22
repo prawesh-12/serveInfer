@@ -14,6 +14,9 @@ class EdgeAgentService {
       agingMs: numberEnv('EDGE_AGING_MS'),
       queueTimeoutMs: numberEnv('EDGE_QUEUE_TIMEOUT_MS'),
       defaultDurationMs: numberEnv('EDGE_DEFAULT_JOB_MS'),
+      execTimeoutMs: numberEnv('EDGE_EXEC_TIMEOUT_MS'),
+      doneTtlMs: numberEnv('EDGE_DONE_TTL_MS'),
+      doneMaxEntries: numberEnv('EDGE_DONE_MAX_ENTRIES'),
     });
   }
 
@@ -170,6 +173,7 @@ class EdgeAgentService {
       result: String(finalDonePayload.result || ''),
       device: String(finalDonePayload.device || 'cpu'),
       degraded: Boolean(finalDonePayload.degraded),
+      degradedReason: finalDonePayload.degradedReason || null,
     };
   }
 }

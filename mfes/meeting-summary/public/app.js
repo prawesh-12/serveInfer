@@ -14,6 +14,7 @@ const streamQueueMetaEl = document.getElementById("streamQueueMeta");
 let currentRequestId = null;
 let source = null;
 let tokenCount = 0;
+const cancelledRequests = new Set();
 
 function apiUrl(path) {
     return `${API_BASE}${path}`;
@@ -78,80 +79,135 @@ function stopCurrent(showMessage = true) {
     }
 }
 
+// One attempt is one EventSource, opened and closed. It resolves when the
+// `done` event arrives. It rejects with the shell's error payload attached, so
+// withRetry can decide whether to try again.
+function runStreamAttempt({ requestId, prompt }) {
+    return new Promise((resolve, reject) => {
+        const params = new URLSearchParams({
+            requestId,
+            prompt,
+            mfeId: "meeting-summary",
+            priority: "high",
+        });
+        source = new EventSource(apiUrl(`/api/stream?${params.toString()}`));
+        const active = source;
+
+        const closeSource = () => {
+            active.close();
+            if (source === active) {
+                source = null;
+            }
+        };
+
+        active.addEventListener("queued", (event) => {
+            const payload = JSON.parse(event.data);
+            const eta = Math.ceil((payload.estimatedWaitMs || 0) / 1000);
+            setStatus(`Queued: position ${payload.position}, ETA ${eta}s`);
+            logEvent("queued", requestId, { position: payload.position, eta });
+        });
+
+        active.addEventListener("started", () => {
+            setStatus("Streaming: active inference slot in use");
+            logEvent("started", requestId);
+        });
+
+        active.addEventListener("token", (event) => {
+            const payload = JSON.parse(event.data);
+            tokenCount += 1;
+            outputEl.textContent += payload.token || "";
+            streamMetaEl.textContent = `${tokenCount} tokens`;
+        });
+
+        active.addEventListener("timeout", (event) => {
+            const payload = JSON.parse(event.data);
+            logEvent("timeout", requestId, { phase: payload.phase, retryable: payload.retryable });
+        });
+
+        active.addEventListener("cancelled", () => {
+            closeSource();
+            const err = new Error("request_cancelled");
+            err.payload = { error: "request_cancelled" };
+            reject(err);
+        });
+
+        active.addEventListener("done", (event) => {
+            closeSource();
+            resolve(JSON.parse(event.data));
+        });
+
+        active.addEventListener("error", (event) => {
+            let payload = {};
+            try {
+                payload = event.data ? JSON.parse(event.data) : {};
+            } catch {
+                payload = { error: "connection_closed" };
+            }
+            closeSource();
+            const err = new Error(payload.error || "stream_failed");
+            err.payload = payload;
+            reject(err);
+        });
+    });
+}
+
 summariseBtn.addEventListener("click", async () => {
     const prompt = transcriptEl.value.trim();
     if (!prompt) return;
 
     outputEl.textContent = "";
     outputEl.classList.remove("empty-state");
+    // Every retry uses this same id, so the agent replays a cached answer
+    // rather than writing the same summary twice.
     currentRequestId = makeId();
+    cancelledRequests.delete(currentRequestId);
+    const requestId = currentRequestId;
     tokenCount = 0;
-    const params = new URLSearchParams({
-        requestId: currentRequestId,
-        prompt,
-        mfeId: "meeting-summary",
-        priority: "high",
-    });
 
     setStatus("Connecting to shell SSE...");
-    streamMetaEl.textContent = `stream ${shortId(currentRequestId)}`;
-    logEvent("submitted", currentRequestId, { priority: "high", transport: "sse", shell: API_BASE });
+    streamMetaEl.textContent = `stream ${shortId(requestId)}`;
+    logEvent("submitted", requestId, { priority: "high", transport: "sse", shell: API_BASE });
     stopBtn.disabled = false;
     summariseBtn.disabled = true;
 
-    source = new EventSource(apiUrl(`/api/stream?${params.toString()}`));
+    try {
+        const payload = await window.MFE_RETRY.withRetry(
+            () => {
+                // Clear the half-written summary from the failed attempt.
+                outputEl.textContent = "";
+                tokenCount = 0;
+                return runStreamAttempt({ requestId, prompt });
+            },
+            {
+                cancelled: () => cancelledRequests.has(requestId),
+                onRetry: ({ attempt, of, waitMs, error }) => {
+                    const seconds = Math.ceil(waitMs / 1000);
+                    setStatus(`${error}: retrying in ${seconds}s (attempt ${attempt + 1} of ${of})`);
+                    logEvent("retry", requestId, { attempt, of, waitMs, error });
+                },
+            }
+        );
 
-    source.addEventListener("queued", (event) => {
-        const payload = JSON.parse(event.data);
-        const eta = Math.ceil((payload.estimatedWaitMs || 0) / 1000);
-        setStatus(`Queued: position ${payload.position}, ETA ${eta}s`);
-        logEvent("queued", currentRequestId, { position: payload.position, eta });
-    });
-
-    source.addEventListener("started", () => {
-        setStatus("Streaming: active inference slot in use");
-        logEvent("started", currentRequestId);
-    });
-
-    source.addEventListener("token", (event) => {
-        const payload = JSON.parse(event.data);
-        const token = payload.token || "";
-        tokenCount += 1;
-        outputEl.textContent += token;
-        streamMetaEl.textContent = `${tokenCount} tokens`;
-    });
-
-    source.addEventListener("done", (event) => {
-        const payload = JSON.parse(event.data);
         setStatus(`Done on ${payload.device || "cpu"}`);
-        logEvent("done", currentRequestId, {
+        logEvent("done", requestId, {
             device: payload.device || "cpu",
             degraded: Boolean(payload.degraded),
+            replay: Boolean(payload.replay),
             tokens: tokenCount,
         });
-        stopCurrent(false);
-        refreshHealth();
-    });
+    } catch (err) {
+        const payload = (err && err.payload) || {};
+        setStatus(`Failed after retries: ${payload.error || "stream_failed"}`);
+        logEvent("error", requestId, payload);
+    }
 
-    source.addEventListener("error", (event) => {
-        let payload = {};
-        try {
-            payload = event.data ? JSON.parse(event.data) : {};
-        } catch {
-            payload = { error: "connection_closed" };
-        }
-        const message = payload.retryAfterSeconds
-            ? `Worker crashed. Retry in ${payload.retryAfterSeconds}s`
-            : `Error: ${payload.error || "stream_failed"}`;
-        setStatus(message);
-        logEvent("error", currentRequestId, payload);
-        stopCurrent(false);
-        refreshHealth();
-    });
+    stopCurrent(false);
+    refreshHealth();
 });
 
 stopBtn.addEventListener("click", async () => {
     if (!currentRequestId) return;
+    cancelledRequests.add(currentRequestId);
     await fetch(apiUrl("/api/cancel"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },

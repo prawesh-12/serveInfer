@@ -18,6 +18,8 @@ class WorkerPool {
     this.workerCount = Number(options.workerCount);
     this.workerSocketPrefix = options.workerSocketPrefix;
     this.connectTimeoutMs = Number(options.connectTimeoutMs);
+    this.recoveryMs = Number(options.recoveryMs ?? 2000);
+    this.recoveryAttempts = Number(options.recoveryAttempts ?? 10);
     if (!Number.isInteger(this.workerCount) || this.workerCount <= 0) {
       throw new Error('WorkerPool requires a positive workerCount');
     }
@@ -36,6 +38,8 @@ class WorkerPool {
         workerId: i,
         socketPath: `${this.workerSocketPrefix}${i}.sock`,
         status: 'starting',
+        recoveryTimer: null,
+        recoveryAttempt: 0,
       });
     }
   }
@@ -45,6 +49,7 @@ class WorkerPool {
       id: w.workerId,
       status: w.status,
       socketPath: w.socketPath,
+      recoveryAttempt: w.recoveryAttempt,
     }));
     const activeSlots = workers.filter((w) => w.status === 'busy').length;
     return {
@@ -62,9 +67,26 @@ class WorkerPool {
       this._markWorkerCrashed(msg.workerId, msg.requestId || null);
       return;
     }
-    if ((msg.type === 'worker_ready' || msg.type === 'worker_restarted') && Number.isInteger(msg.workerId)) {
+    if (msg.type === 'worker_restarted' && Number.isInteger(msg.workerId)) {
+      // The supervisor has started a replacement, but its socket is not there
+      // yet. So reset the attempt count and let the probe decide. Marking it
+      // ready now would hand out a worker that cannot take a connection.
       const worker = this.workers.get(msg.workerId);
       if (worker && worker.status !== 'busy') {
+        clearTimeout(worker.recoveryTimer);
+        worker.recoveryTimer = null;
+        worker.recoveryAttempt = 0;
+        worker.status = 'crashed';
+        this._scheduleRecoveryProbe(msg.workerId);
+      }
+      return;
+    }
+    if (msg.type === 'worker_ready' && Number.isInteger(msg.workerId)) {
+      const worker = this.workers.get(msg.workerId);
+      if (worker && worker.status !== 'busy') {
+        clearTimeout(worker.recoveryTimer);
+        worker.recoveryTimer = null;
+        worker.recoveryAttempt = 0;
         worker.status = 'ready';
       }
     }
@@ -125,6 +147,9 @@ class WorkerPool {
       }
       done = true;
       cleanup();
+      if (WorkerPool.isTransportFailure(err?.code)) {
+        this._quarantineAfterTransportFailure(worker.workerId);
+      }
       if (!client.destroyed) {
         client.destroy();
       }
@@ -196,6 +221,7 @@ class WorkerPool {
             text: String(msg.text ?? ''),
             device: String(msg.device ?? 'cpu'),
             degraded: Boolean(msg.degraded),
+            degradedReason: msg.degradedReason ? String(msg.degradedReason) : null,
           });
           return;
         }
@@ -274,12 +300,88 @@ class WorkerPool {
       );
     }
 
-    setTimeout(() => {
-      const current = this.workers.get(workerId);
-      if (current && current.status === 'crashed') {
-        current.status = 'ready';
+    clearTimeout(worker.recoveryTimer);
+    worker.recoveryAttempt = 0;
+    this._scheduleRecoveryProbe(workerId);
+  }
+
+  // A crashed worker comes back only when its socket really accepts a
+  // connection. The dead process often leaves its socket file behind, and that
+  // file refuses connections. So if the circuit breaker blocked the restart, the
+  // worker stays out of the pool instead of being handed back.
+  // These codes mean the socket itself failed. The worker did not refuse the
+  // work. It never accepted the connection at all. Usually that means a stale
+  // socket file left behind by a process that is already gone.
+  static isTransportFailure(code) {
+    return (
+      code === 'worker_connect_timeout' ||
+      code === 'worker_socket_error' ||
+      code === 'worker_closed'
+    );
+  }
+
+  // _refreshWorkerReadiness marks a worker ready if its socket file exists. A
+  // stale file passes that check. Probing on every acquire would be wasteful, so
+  // instead we let the first failed request be the proof, and take the worker
+  // out then.
+  _quarantineAfterTransportFailure(workerId) {
+    const worker = this.workers.get(workerId);
+    if (!worker || worker.status === 'crashed') {
+      return;
+    }
+    worker.status = 'crashed';
+    clearTimeout(worker.recoveryTimer);
+    worker.recoveryAttempt = 0;
+    this._scheduleRecoveryProbe(workerId);
+  }
+
+  _scheduleRecoveryProbe(workerId) {
+    const worker = this.workers.get(workerId);
+    if (!worker || worker.status !== 'crashed') {
+      return;
+    }
+    if (worker.recoveryAttempt >= this.recoveryAttempts) {
+      return; // only a supervisor worker_ready notification brings it back now
+    }
+    worker.recoveryAttempt += 1;
+    const delay = this.recoveryMs * worker.recoveryAttempt;
+    worker.recoveryTimer = setTimeout(() => {
+      this._probeWorker(workerId).then((alive) => {
+        const current = this.workers.get(workerId);
+        if (!current || current.status !== 'crashed') {
+          return;
+        }
+        if (alive) {
+          current.recoveryTimer = null;
+          current.recoveryAttempt = 0;
+          current.status = 'ready';
+          return;
+        }
+        this._scheduleRecoveryProbe(workerId);
+      });
+    }, delay);
+  }
+
+  _probeWorker(workerId) {
+    const worker = this.workers.get(workerId);
+    return new Promise((resolve) => {
+      if (!worker || !fs.existsSync(worker.socketPath)) {
+        resolve(false);
+        return;
       }
-    }, 2000);
+      const probe = net.createConnection({ path: worker.socketPath });
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        probe.destroy();
+        resolve(ok);
+      };
+      const timer = setTimeout(() => finish(false), this.connectTimeoutMs);
+      probe.once('connect', () => finish(true));
+      probe.once('error', () => finish(false));
+    });
   }
 
   _runRequest({ worker, requestId, prompt, mfeId, stream }) {
@@ -313,6 +415,9 @@ class WorkerPool {
         }
         done = true;
         cleanup();
+        if (WorkerPool.isTransportFailure(err?.code)) {
+          this._quarantineAfterTransportFailure(worker.workerId);
+        }
         reject(err);
       };
 
@@ -387,6 +492,7 @@ class WorkerPool {
               text: String(msg.text ?? ''),
               device: String(msg.device ?? 'cpu'),
               degraded: Boolean(msg.degraded),
+              degradedReason: msg.degradedReason ? String(msg.degradedReason) : null,
             });
             return;
           }

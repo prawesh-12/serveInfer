@@ -107,7 +107,8 @@ bool Worker::init() {
   inferConfig.maxTokens = config_.maxTokens;
   inferConfig.temperature = config_.temperature;
   inferConfig.seed = config_.seed;
-  inferConfig.forceCpu = config_.forceCpu;
+  // The ladder picks the tier. The engine loads on whatever it is handed.
+  inferConfig.forceCpu = config_.forceCpu || ladder_->active() != "cuda";
 
   engine_ = new InferEngine(inferConfig);
   if (!engine_->init()) {
@@ -115,8 +116,14 @@ bool Worker::init() {
     return false;
   }
 
-  activeDevice_ = engine_->isUsingGPU() ? "cuda" : "cpu";
-  cudaAvailable_.store(engine_->isUsingGPU());
+  // The engine has its own GPU to CPU retry at model load time. If that fired,
+  // the ladder needs to know. Otherwise the two disagree about which tier we are
+  // on, and `degraded` reports whichever one the caller happened to read.
+  if (ladder_->active() == "cuda" && !engine_->isUsingGPU()) {
+    ladder_->reportFault(DeviceFault::kUnavailable, "gpu model load failed at startup");
+  }
+  activeDevice_ = ladder_->active();
+  cudaAvailable_.store(activeDevice_ == "cuda");
 
   if (!setupSocketServer()) {
     return false;
@@ -234,19 +241,86 @@ bool Worker::attachSharedMemory() {
 }
 
 bool Worker::selectDevice() {
+  std::vector<std::string> order = config_.deviceLadder;
   if (config_.forceCpu) {
-    cudaAvailable_.store(false);
-    activeDevice_ = "cpu";
-    return true;
+    order = {"cpu"};
   }
-  if (access("/dev/nvidia0", R_OK) == 0) {
-    cudaAvailable_.store(true);
-    activeDevice_ = "cuda";
-    return true;
+  ladder_ = std::make_unique<DeviceLadder>(order, config_.deviceQuarantineMs,
+                                           config_.deviceProbeIntervalMs);
+  if (!ladder_->select()) {
+    std::cerr << "[worker] no usable device in ladder\n";
+    return false;
   }
-  cudaAvailable_.store(false);
-  activeDevice_ = "cpu";
+  activeDevice_ = ladder_->active();
+  cudaAvailable_.store(activeDevice_ == "cuda");
+  std::cerr << "[worker] device ladder: " << ladder_->toJson() << '\n';
   return true;
+}
+
+// Both the buffered and the streaming path use this. On a device fault it moves
+// the ladder down a tier, rebuilds the engine there, and runs the prompt once
+// more. Before this existed, the only fallback in the process was at model load.
+bool Worker::escalateAfterFault(DeviceFault fault, const std::string& detail) {
+  if (!ladder_->reportFault(fault, detail)) {
+    return false;
+  }
+  activeDevice_ = ladder_->active();
+  cudaAvailable_.store(activeDevice_ == "cuda");
+  if (!engine_->reloadOn(activeDevice_ == "cpu")) {
+    std::cerr << "[worker] engine reload on " << activeDevice_ << " failed\n";
+    return false;
+  }
+  std::cerr << "[worker] recovered on " << activeDevice_ << " after "
+            << deviceFaultName(fault) << '\n';
+  return true;
+}
+
+std::string Worker::generateWithFallback(const std::string& prompt) {
+  std::lock_guard<std::mutex> guard(engineMutex_);
+  std::string text = engine_->generate(prompt);
+  const DeviceFault fault = engine_->lastFault();
+  if (fault == DeviceFault::kNone) {
+    return text;
+  }
+  if (!escalateAfterFault(fault, engine_->lastFaultDetail())) {
+    return text;
+  }
+  return engine_->generate(prompt);
+}
+
+void Worker::streamWithFallback(const std::string& prompt,
+                                const std::function<void(const std::string&)>& onToken,
+                                std::string& merged) {
+  std::lock_guard<std::mutex> guard(engineMutex_);
+  engine_->generateStreaming(prompt, [&](const std::string& token) {
+    merged += token;
+    onToken(token);
+  });
+  const DeviceFault fault = engine_->lastFault();
+  if (fault == DeviceFault::kNone) {
+    return;
+  }
+  if (!escalateAfterFault(fault, engine_->lastFaultDetail())) {
+    return;
+  }
+  // Tokens we already sent stay sent. The retry replaces the whole answer.
+  merged.clear();
+  engine_->generateStreaming(prompt, [&](const std::string& token) {
+    merged += token;
+    onToken(token);
+  });
+}
+
+// device, degraded and the reason all come from the ladder. So degraded means
+// "we fell back to a lower tier", not "we happen to be running on cpu".
+std::string Worker::deviceResultFields() const {
+  const bool degraded = ladder_ && ladder_->degraded();
+  std::string out = ",\"device\":\"" + activeDevice_ + "\",\"degraded\":" +
+                    (degraded ? "true" : "false");
+  if (degraded) {
+    out += ",\"degradedReason\":\"" + jsonEscape(ladder_->degradedReason()) + "\"";
+  }
+  return out;
 }
 
 bool Worker::setupSocketServer() {
@@ -327,48 +401,46 @@ void Worker::handleClient(int clientFd) {
   InferenceJob job;
   std::string parseError;
   if (!parseJob(payload, job, parseError)) {
-    const std::string errorJson = "{\"type\":\"error\",\"error\":\"" + jsonEscape(parseError) + "\"}\n";
+    const std::string errorJson = "{\"type\":\"error\",\"requestId\":\"" +
+                                  jsonEscape(job.requestId) + "\",\"error\":\"" +
+                                  jsonEscape(parseError) + "\"}\n";
     sendAll(clientFd, errorJson);
     return;
   }
 
   if (engine_ == nullptr) {
-    sendAll(clientFd, "{\"type\":\"error\",\"error\":\"engine_not_initialized\"}\n");
+    sendAll(clientFd, "{\"type\":\"error\",\"requestId\":\"" + jsonEscape(job.requestId) +
+                          "\",\"error\":\"engine_not_initialized\"}\n");
     return;
   }
 
   if (!job.stream) {
-    const std::string text = engine_->generate(job.prompt);
-    const bool degraded = activeDevice_ == "cpu";
+    const std::string text = generateWithFallback(job.prompt);
     const std::string resultJson =
         "{\"type\":\"result\",\"requestId\":\"" + jsonEscape(job.requestId) + "\",\"text\":\"" +
-        jsonEscape(text) + "\",\"device\":\"" + activeDevice_ + "\",\"degraded\":" +
-        (degraded ? "true" : "false") + "}\n";
+        jsonEscape(text) + "\"" + deviceResultFields() + "}\n";
     sendAll(clientFd, resultJson);
     return;
   }
 
   bool writeOk = true;
   std::string merged;
-  engine_->generateStreaming(job.prompt, [&](const std::string& token) {
+  streamWithFallback(job.prompt, [&](const std::string& token) {
     if (!writeOk) {
       return;
     }
-    merged += token;
     const std::string tokenJson =
         "{\"type\":\"token\",\"requestId\":\"" + jsonEscape(job.requestId) + "\",\"token\":\"" +
         jsonEscape(token) + "\"}\n";
     writeOk = sendAll(clientFd, tokenJson);
-  });
+  }, merged);
   if (!writeOk) {
     return;
   }
 
-  const bool degraded = activeDevice_ == "cpu";
   const std::string doneJson =
       "{\"type\":\"result\",\"requestId\":\"" + jsonEscape(job.requestId) + "\",\"text\":\"" +
-      jsonEscape(merged) + "\",\"device\":\"" + activeDevice_ + "\",\"degraded\":" +
-      (degraded ? "true" : "false") + "}\n";
+      jsonEscape(merged) + "\"" + deviceResultFields() + "}\n";
   sendAll(clientFd, doneJson);
 }
 

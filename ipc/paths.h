@@ -33,6 +33,10 @@ inline std::string modelConfigPath() {
   return envValue("EDGE_MODEL_CONFIG_PATH");
 }
 
+inline std::string deviceLadderSpec() {
+  return envValue("EDGE_DEVICE_LADDER");
+}
+
 inline std::string workerSock(int id) {
   return workerSockPrefix() + std::to_string(id) + ".sock";
 }

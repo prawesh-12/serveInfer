@@ -9,6 +9,14 @@ const port = numberEnv('EDGE_MEETING_MFE_PORT');
 const shellApiBase = requiredEnv('EDGE_SHELL_PUBLIC_BASE');
 const publicDir = path.join(__dirname, 'public');
 
+// The browser never talks to the agent directly, so it cannot read the agent's
+// config. We hand it the retry policy at runtime instead.
+const retryPolicy = {
+  attempts: numberEnv('EDGE_CLIENT_RETRY_ATTEMPTS'),
+  baseMs: numberEnv('EDGE_CLIENT_RETRY_BASE_MS'),
+  maxMs: numberEnv('EDGE_CLIENT_RETRY_MAX_MS'),
+};
+
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -26,7 +34,7 @@ function serveStatic(req, res) {
     send(
       res,
       200,
-      `window.MFE_CONFIG = ${JSON.stringify({ shellApiBase })};\n`,
+      `window.MFE_CONFIG = ${JSON.stringify({ shellApiBase, retry: retryPolicy })};\n`,
       'text/javascript; charset=utf-8'
     );
     return;

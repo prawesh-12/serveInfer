@@ -97,6 +97,7 @@ app.post('/api/infer', async (req, res) => {
       result: String(result.result || ''),
       device: String(result.device || 'cpu'),
       degraded: Boolean(result.degraded),
+      degradedReason: result.degradedReason || null,
     });
   } catch (err) {
     const status = Number(err?.status || 502);
@@ -120,6 +121,15 @@ app.post('/api/infer', async (req, res) => {
     if (err?.name === 'SchedulerError' && err.code === 'queue_timeout') {
       res.status(408).json({
         error: 'queue_timeout',
+        retryable: true,
+        requestId,
+      });
+      return;
+    }
+    if (err?.name === 'SchedulerError' && err.code === 'exec_timeout') {
+      res.status(504).json({
+        error: 'exec_timeout',
+        ranMs: Number(err.details?.ranMs || 0),
         retryable: true,
         requestId,
       });
@@ -191,7 +201,9 @@ app.get('/api/stream', async (req, res) => {
         } else if (status.state === 'timeout') {
           sendSse('timeout', {
             requestId,
+            phase: status.phase || 'queue',
             waitedMs: status.waitedMs,
+            ranMs: status.ranMs,
             retryable: Boolean(status.retryable),
           });
         }
@@ -266,6 +278,8 @@ app.get('/api/agent-health', async (_req, res) => {
   }
 });
 
-app.listen(port, () => {
+// Bind to loopback only. Nothing in this stack authenticates, and the shell is
+// the process that reaches the agent. Every other server here already does this.
+app.listen(port, '127.0.0.1', () => {
   logger.info(`listening on http://127.0.0.1:${port} (log level: ${logger.level})`);
 });

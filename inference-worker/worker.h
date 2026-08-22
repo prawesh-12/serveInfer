@@ -2,9 +2,14 @@
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
+#include "deviceLadder.h"
 #include "inferEngine.h"
 
 struct InferenceJob {
@@ -26,6 +31,9 @@ struct WorkerConfig {
   float temperature = 0.8f;
   int gpuLayers = 99;
   int seed = 42;
+  std::vector<std::string> deviceLadder{"cuda", "cpu"};
+  int deviceQuarantineMs = 60000;
+  int deviceProbeIntervalMs = 5000;
 };
 
 class Worker {
@@ -40,6 +48,14 @@ class Worker {
  private:
   bool attachSharedMemory();
   bool selectDevice();
+  // Runs generate once. On a device fault it moves the ladder down a tier,
+  // rebuilds the engine there, and tries again. Returns the text either way.
+  bool escalateAfterFault(DeviceFault fault, const std::string& detail);
+  std::string generateWithFallback(const std::string& prompt);
+  void streamWithFallback(const std::string& prompt,
+                          const std::function<void(const std::string&)>& onToken,
+                          std::string& merged);
+  std::string deviceResultFields() const;
   bool setupSocketServer();
   bool parseJob(const std::string& raw, InferenceJob& out, std::string& error) const;
   void handleClient(int clientFd);
@@ -55,6 +71,10 @@ class Worker {
   std::atomic<bool> running_{false};
   std::atomic<bool> cudaAvailable_{false};
   std::string activeDevice_{"cpu"};
+  std::unique_ptr<DeviceLadder> ladder_;
+  // Every connection shares one engine, and a fallback rebuilds that engine in
+  // place. So only one escalation may run at a time.
+  std::mutex engineMutex_;
   InferEngine* engine_ = nullptr;
 
   int serverFd_ = -1;

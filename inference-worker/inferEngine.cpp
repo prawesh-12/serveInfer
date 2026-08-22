@@ -1,9 +1,59 @@
 #include "inferEngine.h"
 
+#if defined(EDGE_USE_LLAMA)
 #include "llama.h"
+#endif
 
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <vector>
+
+void InferEngine::recordFault(DeviceFault fault, const std::string& detail) {
+  lastFault_ = fault;
+  lastFaultDetail_ = detail;
+}
+
+// We cannot cause a real ERROR_DEVICE_REMOVED on this machine. So to try the
+// fallback path, set EDGE_SIMULATE_DEVICE_FAULT to removed, unsupported or
+// runtime. Leave it unset and this returns kNone and costs nothing.
+DeviceFault InferEngine::injectedFault() const {
+  const char* raw = std::getenv("EDGE_SIMULATE_DEVICE_FAULT");
+  if (raw == nullptr || raw[0] == '\0') {
+    return DeviceFault::kNone;
+  }
+  if (std::strcmp(raw, "removed") == 0) {
+    return DeviceFault::kRemoved;
+  }
+  if (std::strcmp(raw, "unsupported") == 0) {
+    return DeviceFault::kUnsupportedOp;
+  }
+  if (std::strcmp(raw, "runtime") == 0) {
+    return DeviceFault::kRuntimeError;
+  }
+  return DeviceFault::kNone;
+}
+
+bool InferEngine::reloadOn(bool forceCpu) {
+#if defined(EDGE_USE_LLAMA)
+  if (ctx_ != nullptr) {
+    llama_free(static_cast<llama_context*>(ctx_));
+    ctx_ = nullptr;
+  }
+  if (model_ != nullptr) {
+    llama_model_free(static_cast<llama_model*>(model_));
+    model_ = nullptr;
+  }
+#endif
+  cfg_.forceCpu = forceCpu;
+  gpuOk_ = !forceCpu;
+  clearFault();
+#if defined(EDGE_USE_LLAMA)
+  return loadModel();
+#else
+  return true;
+#endif
+}
 
 InferEngine::InferEngine(InferConfig cfg) : cfg_(std::move(cfg)) {}
 
@@ -143,6 +193,12 @@ void InferEngine::runDecodeLoop(const std::function<void(const std::string&)>& o
 }
 
 std::string InferEngine::generate(const std::string& prompt) {
+  clearFault();
+  const DeviceFault injected = injectedFault();
+  if (injected != DeviceFault::kNone) {
+    recordFault(injected, "EDGE_SIMULATE_DEVICE_FAULT");
+    return "[error: simulated device fault]";
+  }
 #if defined(EDGE_USE_LLAMA)
   llama_context* ctx = static_cast<llama_context*>(ctx_);
   auto tokens = tokenize(prompt);
@@ -152,7 +208,11 @@ std::string InferEngine::generate(const std::string& prompt) {
 
   llama_batch batch = llama_batch_get_one(reinterpret_cast<llama_token*>(tokens.data()),
                                           static_cast<int32_t>(tokens.size()));
-  if (llama_decode(ctx, batch) != 0) {
+  const int rc = llama_decode(ctx, batch);
+  if (rc != 0) {
+    // llama has no device-fault signal of its own. A failed decode is the
+    // closest thing to one, so that is what moves the ladder down a tier.
+    recordFault(DeviceFault::kRuntimeError, "llama_decode rc=" + std::to_string(rc));
     return "[error: prompt eval failed]";
   }
 
@@ -161,6 +221,7 @@ std::string InferEngine::generate(const std::string& prompt) {
     result += piece;
   });
   if (result.empty()) {
+    recordFault(DeviceFault::kRuntimeError, "empty model output");
     return "[error: empty model output]";
   }
   return result;
@@ -174,6 +235,12 @@ std::string InferEngine::generate(const std::string& prompt) {
 
 void InferEngine::generateStreaming(const std::string& prompt,
                                     const std::function<void(const std::string&)>& onToken) {
+  clearFault();
+  const DeviceFault injected = injectedFault();
+  if (injected != DeviceFault::kNone) {
+    recordFault(injected, "EDGE_SIMULATE_DEVICE_FAULT");
+    return;
+  }
 #if defined(EDGE_USE_LLAMA)
   llama_context* ctx = static_cast<llama_context*>(ctx_);
   auto tokens = tokenize(prompt);

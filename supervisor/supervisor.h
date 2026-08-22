@@ -42,7 +42,6 @@ struct SupervisorConfig {
 class CircuitBreaker {
  public:
   bool registerCrash(int workerId);
-  bool isOpen(int workerId) const;
 
  private:
   static constexpr std::size_t kCrashThreshold = 3;
@@ -82,6 +81,8 @@ class Supervisor {
   void writeModelConfig() const;
   bool crashLimitOpenFromDisk(const ProcessInfo& info) const;
   bool notifyApiServerWorkerCrash(int workerId) const;
+  bool notifyApiServerWorkerRestarted(int workerId) const;
+  bool notifyApiServer(const char* type, int workerId) const;
 
   static std::string processTypeToString(ProcessType type);
   static std::string jsonEscape(const std::string& input);
