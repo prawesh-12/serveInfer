@@ -93,4 +93,6 @@ class Worker {
   std::size_t shmSize_ = 0;
 
   std::thread heartbeatThread_;
+  // Epoch ms when the current request started, 0 when idle. The heartbeat thread reads it.
+  std::atomic<long long> requestStartedAtMs_{0};
 };

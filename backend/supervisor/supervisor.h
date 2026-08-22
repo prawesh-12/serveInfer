@@ -14,6 +14,7 @@
 #include "../hardware/capacityPlan.h"
 #include "../hardware/hardwareReport.h"
 #include "../ipc/exitCodes.h"
+#include "workerLiveness.h"
 
 enum class ProcessType {
   kModelCache,
@@ -47,6 +48,7 @@ struct SupervisorConfig {
   CapacityLimits capacity;
   std::string meminfoPath = "/proc/meminfo";
   int hardwareProbeTimeoutMs = 10000;
+  LivenessLimits liveness;
 };
 
 class CircuitBreaker {
@@ -93,6 +95,8 @@ class Supervisor {
   void restartWorkersAfterModelCacheRestart();
   void cleanupSocket();
   void drainSupervisorSocket();
+  void checkWorkerLiveness();
+  void recordHeartbeat(int workerId, long long busyMs);
 
   void writeCrashLog(const ProcessInfo& info, int status, const std::string& reason) const;
   void writeModelConfig() const;
@@ -123,4 +127,5 @@ class Supervisor {
 
   std::unordered_map<pid_t, ProcessInfo> processesByPid_;
   std::unordered_map<int, pid_t> workerPidById_;
+  std::unordered_map<int, WorkerHealth> workerHealthById_;
 };

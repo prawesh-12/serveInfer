@@ -21,6 +21,13 @@
 
 namespace {
 
+long long nowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+
 bool extractString(const std::string& json, const std::string& key, std::string& out) {
   const std::regex pattern("\"" + key + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
   std::smatch match;
@@ -445,6 +452,14 @@ bool Worker::parseJob(const std::string& raw, InferenceJob& out, std::string& er
 }
 
 void Worker::handleClient(int clientFd) {
+  requestStartedAtMs_.store(nowMs());
+  struct ClearOnReturn {
+    std::atomic<long long>* slot;
+    ~ClearOnReturn() {
+      slot->store(0);
+    }
+  } clearOnReturn{&requestStartedAtMs_};
+
   std::string payload;
   payload.reserve(2048);
   char buffer[2048];
@@ -537,9 +552,12 @@ void Worker::heartbeatLoop() {
       addr.sun_family = AF_UNIX;
       std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", config_.supervisorSocketPath.c_str());
       if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+        const long long startedAt = requestStartedAtMs_.load();
+        const long long busyMs = startedAt == 0 ? 0 : nowMs() - startedAt;
         const std::string heartbeat =
             "{\"type\":\"heartbeat\",\"workerId\":" + std::to_string(config_.workerId) +
-            ",\"status\":\"ready\",\"device\":\"" + activeDevice_ + "\"}\n";
+            ",\"status\":\"" + (startedAt == 0 ? "ready" : "busy") + "\",\"device\":\"" +
+            activeDevice_ + "\",\"busyMs\":" + std::to_string(busyMs) + "}\n";
         if (sendAll(fd, heartbeat)) {
           consecutiveFailures = 0;
         } else {

@@ -76,6 +76,15 @@ int main(int argc, char** argv) {
   if (const char* value = std::getenv("EDGE_HW_PROBE_TIMEOUT_MS")) {
     parseIntArg(value, config.hardwareProbeTimeoutMs);
   }
+  if (const char* value = std::getenv("EDGE_WORKER_HEARTBEAT_GRACE_MS")) {
+    parseLongLongArg(value, config.liveness.startupGraceMs);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_HEARTBEAT_TIMEOUT_MS")) {
+    parseLongLongArg(value, config.liveness.heartbeatTimeoutMs);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_STUCK_REQUEST_MS")) {
+    parseLongLongArg(value, config.liveness.stuckRequestMs);
+  }
   if (const char* value = std::getenv("EDGE_MEMINFO_PATH")) {
     config.meminfoPath = value;
   }

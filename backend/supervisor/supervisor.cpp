@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -26,6 +27,12 @@
 #include <utility>
 
 namespace {
+long long nowEpochMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
 constexpr int kCircuitKeyModelCache = -1001;
 constexpr int kCircuitKeyApiServer = -1002;
 
@@ -109,6 +116,7 @@ int Supervisor::monitorLoop() {
   while (running_.load()) {
     reapChildren();
     drainSupervisorSocket();
+    checkWorkerLiveness();
     std::this_thread::sleep_for(std::chrono::milliseconds(config_.pollIntervalMs));
   }
 
@@ -426,6 +434,7 @@ bool Supervisor::startWorker(int workerId) {
   writePidFile(pidFileNameFor(info), pid);
   processesByPid_[pid] = std::move(info);
   workerPidById_[workerId] = pid;
+  workerHealthById_[workerId] = WorkerHealth{nowEpochMs(), 0, 0};
   std::cerr << "[supervisor] started worker " << workerId << " pid=" << pid << " backend="
             << (assignment != nullptr ? workerBackendName(assignment->backend) : "unassigned")
             << '\n';
@@ -490,6 +499,7 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   removePidFile(pidFileNameFor(info));
   if (info.type == ProcessType::kWorker && info.workerId >= 0) {
     workerPidById_.erase(info.workerId);
+    workerHealthById_.erase(info.workerId);
   }
 
   const bool exitedNormally = WIFEXITED(status) && WEXITSTATUS(status) == 0;
@@ -637,6 +647,38 @@ void Supervisor::cleanupSocket() {
   }
 }
 
+void Supervisor::recordHeartbeat(int workerId, long long busyMs) {
+  WorkerHealth& health = workerHealthById_[workerId];
+  health.lastHeartbeatMs = nowEpochMs();
+  health.busyMs = busyMs;
+}
+
+// waitpid only reports death. A worker that stops answering, or wedges on one request while its
+// heartbeat thread keeps ticking, is killed here so the ordinary crash path can restart it.
+void Supervisor::checkWorkerLiveness() {
+  const long long now = nowEpochMs();
+
+  for (const auto& [workerId, pid] : workerPidById_) {
+    auto it = workerHealthById_.find(workerId);
+    if (it == workerHealthById_.end()) {
+      continue;
+    }
+    const WorkerLiveness verdict = classifyWorker(now, it->second, config_.liveness);
+    if (verdict == WorkerLiveness::kHealthy || verdict == WorkerLiveness::kStarting) {
+      continue;
+    }
+
+    const long long silentMs = it->second.lastHeartbeatMs > 0 ? now - it->second.lastHeartbeatMs
+                                                              : now - it->second.spawnedAtMs;
+    std::cerr << "[supervisor] worker " << workerId << " is " << workerLivenessName(verdict)
+              << " (silent " << silentMs << "ms, busy " << it->second.busyMs
+              << "ms); killing it so it can be restarted\n";
+    kill(pid, SIGKILL);
+    it->second.lastHeartbeatMs = now;
+    it->second.busyMs = 0;
+  }
+}
+
 void Supervisor::drainSupervisorSocket() {
   if (supervisorServerFd_ < 0) {
     return;
@@ -654,10 +696,12 @@ void Supervisor::drainSupervisorSocket() {
       return;
     }
 
+    std::string pending;
     char buffer[2048];
     while (true) {
       const ssize_t n = read(clientFd, buffer, sizeof(buffer));
       if (n > 0) {
+        pending.append(buffer, static_cast<std::size_t>(n));
         continue;
       }
       if (n == 0 || (n < 0 && errno != EINTR)) {
@@ -665,6 +709,21 @@ void Supervisor::drainSupervisorSocket() {
       }
     }
     close(clientFd);
+
+    std::size_t start = 0;
+    while (start < pending.size()) {
+      const std::size_t nl = pending.find('\n', start);
+      const std::string line = pending.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+      int workerId = -1;
+      long long busyMs = 0;
+      if (parseHeartbeat(line, workerId, busyMs)) {
+        recordHeartbeat(workerId, busyMs);
+      }
+      if (nl == std::string::npos) {
+        break;
+      }
+      start = nl + 1;
+    }
   }
 }
 

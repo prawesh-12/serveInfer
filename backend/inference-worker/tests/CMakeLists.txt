@@ -71,6 +71,7 @@ add_executable(edge-hardware-tests
   fallbackContractTests.cpp
   capacityInputTests.cpp
   workerReassignmentTests.cpp
+  workerLivenessTests.cpp
   hexagonRouteTests.cpp
   cudaInitTests.cpp
   faultInjectionTests.cpp
@@ -84,6 +85,7 @@ add_executable(edge-hardware-tests
   ../../hardware/hardwareReport.cpp
   ../../hardware/capacityPlan.cpp
   ../../supervisor/workerReassignment.cpp
+  ../../supervisor/workerLiveness.cpp
 )
 
 target_include_directories(edge-hardware-tests
