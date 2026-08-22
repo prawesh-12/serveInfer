@@ -17,6 +17,9 @@ class Scheduler {
     this.agingMs = Number(options.agingMs ?? 15_000);
     this.defaultDurationMs = Number(options.defaultDurationMs ?? 8_000);
     this.queueTimeoutMs = Number(options.queueTimeoutMs ?? 30_000);
+    this.execTimeoutMs = Number(options.execTimeoutMs ?? 120_000);
+    this.doneTtlMs = Number(options.doneTtlMs ?? 300_000);
+    this.doneMaxEntries = Number(options.doneMaxEntries ?? 500);
 
     this.queue = [];
     this.active = new Map();
@@ -56,6 +59,8 @@ class Scheduler {
       resolve: resolvePromise,
       reject: rejectPromise,
       queueTimer: null,
+      execTimer: null,
+      execTimedOut: false,
     };
 
     job.queueTimer = setTimeout(() => {
@@ -76,7 +81,7 @@ class Scheduler {
       });
       error.status = 408;
       job.reject(error);
-      this.done.set(requestId, {
+      this._recordDone(requestId, {
         state: 'timeout',
         requestId,
         waitedMs,
@@ -108,11 +113,12 @@ class Scheduler {
         state: 'queued',
       });
       clearTimeout(job.queueTimer);
+      clearTimeout(job.execTimer);
       this._notify(job, 'cancelled', {
         reason: 'user_cancelled',
       });
       job.reject(error);
-      this.done.set(requestId, {
+      this._recordDone(requestId, {
         state: 'cancelled',
         requestId,
         finishedAt: Date.now(),
@@ -253,17 +259,76 @@ class Scheduler {
     this.perMfeActive.set(job.mfeId, (this.perMfeActive.get(job.mfeId) || 0) + 1);
     this._notify(job, 'started', { requestId: job.requestId });
 
+    // Two things can end a job. It finishes, or the execution timeout fires.
+    // Whichever happens first has to free the slot.
+    //
+    // Freeing it only in .finally() would not work. A job that never finishes
+    // would hold its slot forever, and that is the exact case this timeout is
+    // here to catch.
+    let released = false;
+    const releaseSlot = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      clearTimeout(job.execTimer);
+      const duration = Date.now() - startedAt;
+      this.avgDurationMs = Math.round((this.avgDurationMs * 0.7) + (duration * 0.3));
+      this.active.delete(job.requestId);
+      const current = this.perMfeActive.get(job.mfeId) || 0;
+      if (current <= 1) {
+        this.perMfeActive.delete(job.mfeId);
+      } else {
+        this.perMfeActive.set(job.mfeId, current - 1);
+      }
+      this._schedule();
+    };
+
+    job.execTimer = setTimeout(() => {
+      job.execTimedOut = true;
+      const ranMs = Date.now() - startedAt;
+      this._notify(job, 'timeout', {
+        phase: 'execution',
+        ranMs,
+        retryable: true,
+      });
+      job.abortController.abort();
+
+      const error = new SchedulerError('exec_timeout', 'exec_timeout', {
+        requestId: job.requestId,
+        ranMs,
+        retryable: true,
+      });
+      error.status = 504;
+      job.reject(error);
+      this._recordDone(job.requestId, {
+        requestId: job.requestId,
+        state: 'timeout',
+        phase: 'execution',
+        ranMs,
+        retryable: true,
+        finishedAt: Date.now(),
+      });
+      releaseSlot();
+    }, this.execTimeoutMs);
+
     Promise.resolve()
       .then(() => job.execute({ signal: job.abortController.signal }))
       .then((result) => {
+        if (job.execTimedOut) {
+          return; // the timeout already rejected this job and recorded it
+        }
         job.resolve(result);
-        this.done.set(job.requestId, {
+        this._recordDone(job.requestId, {
           requestId: job.requestId,
           state: 'done',
           finishedAt: Date.now(),
         });
       })
       .catch((err) => {
+        if (job.execTimedOut) {
+          return;
+        }
         const cancelled = job.abortController.signal.aborted;
         if (cancelled) {
           job.reject(
@@ -273,14 +338,14 @@ class Scheduler {
                 requestId: job.requestId,
               })
           );
-          this.done.set(job.requestId, {
+          this._recordDone(job.requestId, {
             requestId: job.requestId,
             state: 'cancelled',
             finishedAt: Date.now(),
           });
         } else {
           job.reject(err);
-          this.done.set(job.requestId, {
+          this._recordDone(job.requestId, {
             requestId: job.requestId,
             state: 'failed',
             finishedAt: Date.now(),
@@ -289,17 +354,27 @@ class Scheduler {
         }
       })
       .finally(() => {
-        const duration = Date.now() - startedAt;
-        this.avgDurationMs = Math.round((this.avgDurationMs * 0.7) + (duration * 0.3));
-        this.active.delete(job.requestId);
-        const current = this.perMfeActive.get(job.mfeId) || 0;
-        if (current <= 1) {
-          this.perMfeActive.delete(job.mfeId);
-        } else {
-          this.perMfeActive.set(job.mfeId, current - 1);
-        }
-        this._schedule();
+        releaseSlot();
       });
+  }
+
+  _recordDone(requestId, entry) {
+    this.done.set(requestId, entry);
+    this._evictDone();
+  }
+
+  // The shell runs for a long time. Without this, the map never stops growing.
+  _evictDone() {
+    const cutoff = Date.now() - this.doneTtlMs;
+    for (const [id, entry] of this.done) {
+      if ((entry.finishedAt ?? 0) >= cutoff) {
+        break; // insertion order is finish order, so the rest are newer
+      }
+      this.done.delete(id);
+    }
+    while (this.done.size > this.doneMaxEntries) {
+      this.done.delete(this.done.keys().next().value);
+    }
   }
 
   _notify(job, state, payload = {}) {

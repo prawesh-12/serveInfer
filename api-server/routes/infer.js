@@ -1,11 +1,14 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const fs = require('node:fs');
-const { requiredEnv } = require('../../config/env');
+const { numberEnv, requiredEnv } = require('../../config/env');
 const { WorkerPoolError } = require('../ipc');
+const { RequestRegistry } = require('../requestRegistry');
 
-const LAST_REQUEST_PATH = requiredEnv('EDGE_LAST_REQUEST_PATH');
+const registry = new RequestRegistry({
+  inflightPath: requiredEnv('EDGE_INFLIGHT_PATH'),
+  idempotencyTtlMs: numberEnv('EDGE_IDEMPOTENCY_TTL_MS'),
+});
 
 function sendSse(res, event, payload) {
   res.write(`event: ${event}\n`);
@@ -19,14 +22,6 @@ function sanitizePrompt(value) {
   return value.trim();
 }
 
-function persistLastRequest({ requestId, mfeId }) {
-  const payload = {
-    requestId,
-    mfeId,
-    timestamp: new Date().toISOString(),
-  };
-  fs.writeFile(LAST_REQUEST_PATH, `${JSON.stringify(payload)}\n`, () => {});
-}
 
 function registerInferRoutes(app, workerPool) {
   app.post('/infer', async (req, res) => {
@@ -39,18 +34,29 @@ function registerInferRoutes(app, workerPool) {
       return;
     }
 
-    persistLastRequest({ requestId, mfeId });
+    const attempt = registry.run({
+      requestId,
+      mfeId,
+      stream: false,
+      execute: () => workerPool.runInference({ prompt, requestId, mfeId }),
+    });
 
     try {
-      const result = await workerPool.runInference({ prompt, requestId, mfeId });
+      const result = await attempt.promise;
+      res.setHeader('X-Idempotent-Replay', String(attempt.replay));
       res.setHeader('X-Inference-Device', String(result.device || 'cpu'));
       res.setHeader('X-Inference-Degraded', String(Boolean(result.degraded)));
       res.setHeader('X-Latency-Mode', result.degraded ? 'degraded' : 'normal');
+      if (result.degradedReason) {
+        res.setHeader('X-Degraded-Reason', String(result.degradedReason));
+      }
       res.json({
         requestId,
         result: result.text,
         device: result.device,
         degraded: result.degraded,
+        degradedReason: result.degradedReason,
+        replay: attempt.replay,
       });
     } catch (err) {
       if (err instanceof WorkerPoolError && err.code === 'worker_crashed') {
@@ -93,7 +99,13 @@ function registerInferRoutes(app, workerPool) {
       return;
     }
 
-    persistLastRequest({ requestId, mfeId });
+    const prior = registry.lookup(requestId);
+    if (prior.state === 'inflight') {
+      // This id is already streaming. Running it again would take a second
+      // worker for the same request.
+      res.status(409).json({ error: 'request_in_flight', requestId });
+      return;
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -111,18 +123,44 @@ function registerInferRoutes(app, workerPool) {
     req.on('aborted', abort);
 
     try {
-      streamHandle = workerPool.runStreamingInference({
-        prompt,
+      if (prior.state === 'completed') {
+        // The tokens have already been sent once and cannot be sent again.
+        // So send the finished answer as a single done event.
+        sendSse(res, 'done', {
+          requestId,
+          result: prior.result.text,
+          device: prior.result.device,
+          degraded: prior.result.degraded,
+          degradedReason: prior.result.degradedReason,
+          replay: true,
+        });
+        res.end();
+        return;
+      }
+
+      const attempt = registry.run({
         requestId,
         mfeId,
-        onToken: (token) => sendSse(res, 'token', { requestId, token }),
+        stream: true,
+        execute: () => {
+          streamHandle = workerPool.runStreamingInference({
+            prompt,
+            requestId,
+            mfeId,
+            onToken: (token) => sendSse(res, 'token', { requestId, token }),
+          });
+          return streamHandle.promise;
+        },
       });
-      const result = await streamHandle.promise;
+
+      const result = await attempt.promise;
       sendSse(res, 'done', {
         requestId,
         result: result.text,
         device: result.device,
         degraded: result.degraded,
+        degradedReason: result.degradedReason,
+        replay: attempt.replay,
       });
       res.end();
     } catch (err) {
@@ -170,4 +208,5 @@ function registerInferRoutes(app, workerPool) {
 
 module.exports = {
   registerInferRoutes,
+  registry,
 };

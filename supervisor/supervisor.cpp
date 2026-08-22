@@ -55,14 +55,6 @@ bool CircuitBreaker::registerCrash(int workerId) {
   return queue.size() >= kCrashThreshold;
 }
 
-bool CircuitBreaker::isOpen(int workerId) const {
-  const auto it = history_.find(workerId);
-  if (it == history_.end()) {
-    return false;
-  }
-  return it->second.size() >= kCrashThreshold;
-}
-
 void CircuitBreaker::pruneLocked(int workerId, std::chrono::steady_clock::time_point now) {
   auto it = history_.find(workerId);
   if (it == history_.end()) {
@@ -343,7 +335,9 @@ void Supervisor::handleCrash(pid_t pid, int status) {
       std::cerr << "[supervisor] Worker " << info.workerId << " circuit breaker OPEN\n";
       return;
     }
-    startWorker(info.workerId);
+    if (startWorker(info.workerId)) {
+      notifyApiServerWorkerRestarted(info.workerId);
+    }
     return;
   }
 
@@ -414,7 +408,9 @@ void Supervisor::restartWorkersAfterModelCacheRestart() {
 
   for (int workerId = 0; workerId < config_.workerCount; ++workerId) {
     if (workerPidById_.find(workerId) == workerPidById_.end()) {
-      startWorker(workerId);
+      if (startWorker(workerId)) {
+        notifyApiServerWorkerRestarted(workerId);
+      }
     }
   }
 }
@@ -516,7 +512,7 @@ bool Supervisor::crashLimitOpenFromDisk(const ProcessInfo& info) const {
   return count >= 3;
 }
 
-bool Supervisor::notifyApiServerWorkerCrash(int workerId) const {
+bool Supervisor::notifyApiServer(const char* type, int workerId) const {
   const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
     return false;
@@ -528,11 +524,23 @@ bool Supervisor::notifyApiServerWorkerCrash(int workerId) const {
     close(fd);
     return false;
   }
-  const std::string msg = "{\"type\":\"worker_crashed\",\"workerId\":" + std::to_string(workerId) +
-                          ",\"requestId\":\"\"}\n";
+  const std::string msg = std::string("{\"type\":\"") + type + "\",\"workerId\":" +
+                          std::to_string(workerId) + ",\"requestId\":\"\"}\n";
   const bool ok = sendAll(fd, msg);
   close(fd);
   return ok;
+}
+
+bool Supervisor::notifyApiServerWorkerCrash(int workerId) const {
+  return notifyApiServer("worker_crashed", workerId);
+}
+
+// The api-server needs to hear that a replacement exists. Its worker pool stops
+// probing after EDGE_WORKER_RECOVERY_ATTEMPTS tries. Without this message, a
+// worker that took longer than that to come back would stay out of the pool for
+// the rest of the process.
+bool Supervisor::notifyApiServerWorkerRestarted(int workerId) const {
+  return notifyApiServer("worker_restarted", workerId);
 }
 
 std::string Supervisor::processTypeToString(ProcessType type) {

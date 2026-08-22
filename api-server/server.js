@@ -6,7 +6,7 @@ const path = require('node:path');
 const express = require('express');
 const { numberEnv, requiredEnv } = require('../config/env');
 const { WorkerPool } = require('./ipc');
-const { registerInferRoutes } = require('./routes/infer');
+const { registerInferRoutes, registry } = require('./routes/infer');
 
 const LOG_LEVELS = {
   debug: 10,
@@ -122,6 +122,8 @@ const port = Number(args.port || numberEnv('EDGE_API_PORT'));
 const workerCount = numberEnv('EDGE_WORKER_COUNT');
 const workerSocketPrefix = requiredEnv('EDGE_WORKER_SOCKET_PREFIX');
 const workerConnectTimeoutMs = numberEnv('EDGE_WORKER_CONNECT_TIMEOUT_MS');
+const workerRecoveryMs = numberEnv('EDGE_WORKER_RECOVERY_MS');
+const workerRecoveryAttempts = numberEnv('EDGE_WORKER_RECOVERY_ATTEMPTS');
 const supervisorSocketPath =
   args['supervisor-socket'] || requiredEnv('EDGE_API_NOTIFY_SOCK');
 const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
@@ -133,16 +135,24 @@ const workerPool = new WorkerPool({
   workerCount,
   workerSocketPrefix,
   connectTimeoutMs: workerConnectTimeoutMs,
+  recoveryMs: workerRecoveryMs,
+  recoveryAttempts: workerRecoveryAttempts,
 });
 
 registerInferRoutes(app, workerPool);
 
 app.get('/health', (_req, res) => {
   const health = workerPool.getHealth();
+  const requests = registry.snapshot();
   res.json({
     workers: health.workers.map((w) => ({ id: w.id, status: w.status })),
     activeSlots: health.activeSlots,
     uptime: Math.floor(health.uptimeMs / 1000),
+    requests: {
+      inflight: requests.inflight,
+      completedCached: requests.completedCount,
+      orphanedFromPreviousRun: requests.orphanedFromPreviousRun,
+    },
   });
 });
 
