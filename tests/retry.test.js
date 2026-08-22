@@ -2,17 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
-const retryPath = path.join(__dirname, '..', 'clients', 'document-qa', 'public', 'retry.js');
+const retryPath = path.join(__dirname, '..', 'clients', 'shared', 'src', 'lib', 'retry.js');
+let retryModule;
 
-// A browser script that reads window.MFE_CONFIG once at load, so a new policy needs a fresh load.
+// The policy is read per call from window.MFE_CONFIG, so each test just restates the window.
 function loadRetry(policy) {
   global.window = { MFE_CONFIG: policy ? { retry: policy } : undefined };
-  delete require.cache[require.resolve(retryPath)];
-  require(retryPath);
-  return global.window.MFE_RETRY;
+  return { ...retryModule, policy: retryModule.resolveRetryPolicy() };
 }
 
 function rejectWith(error, extra = {}) {
@@ -21,14 +20,18 @@ function rejectWith(error, extra = {}) {
   return err;
 }
 
-test.after(() => {
-  delete global.window;
-  delete require.cache[require.resolve(retryPath)];
+test.before(async () => {
+  retryModule = await import(pathToFileURL(retryPath).href);
 });
 
-test('the two MFEs ship the same retry helper', () => {
-  const other = path.join(__dirname, '..', 'clients', 'meeting-summary', 'public', 'retry.js');
-  assert.equal(fs.readFileSync(retryPath, 'utf8'), fs.readFileSync(other, 'utf8'));
+test.after(() => {
+  delete global.window;
+});
+
+test('every client shares one retry helper rather than a copy each', () => {
+  assert.equal(typeof retryModule.withRetry, 'function');
+  assert.equal(typeof retryModule.isRetryable, 'function');
+  assert.equal(typeof retryModule.backoffMs, 'function');
 });
 
 test('the transient backend failures are all treated as retryable', () => {

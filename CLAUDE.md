@@ -84,7 +84,8 @@ node backend/shell-app/server.js
 ```
 
 Clients and the dashboard don't need that. They read their own variables and every one has a
-default, so `node clients/document-qa/server.js` works from a clone with no repo config.
+default, so `node clients/chat_1/server.js` works from a clone with no repo config. Both tiers are
+React + Tailwind built with pnpm: `pnpm install` once in `clients/`, then `pnpm build` per app.
 
 ### Tests, lint, CI
 
@@ -112,8 +113,8 @@ pkill -f edge-inference-worker      # expect 503 worker_crashed, then a new line
 ls -l /dev/shm/edge-model-weights   # one shared copy, not one per worker
 ```
 
-Browser: Doc Q&A `:5002` (press "Burst LOW x5" to see queue positions), Meeting Summariser `:5001`
-(streaming), status dashboard `:3001`.
+Browser: `chat_1` `:5001` (press "Burst LOW x5" to see queue positions), `chat_2` `:5002`
+(multi-line streaming), `chat_3`-`chat_5` `:5003`-`:5005`, status dashboard `:3001`.
 
 The C++ side is five binaries: `edge-device-tests` (28, ladder and vendor error mapping),
 `edge-worker-json-tests` (15, frame parsing), `edge-hardware-tests` (131, capacity
@@ -139,9 +140,12 @@ The repo is split by who owns a process, and each tier starts and stops on its o
 
 - `backend/` is the runtime. Supervisor, model cache, workers, api-server, shell.
   Nothing in here serves a browser.
-- `clients/` are the sample user apps. They are HTTP clients of the shell API and
-  import nothing from the backend, so `node clients/document-qa/server.js` runs
-  from a clone with no repo config at all.
+- `clients/` are the sample user apps: `chat_1` to `chat_5`, five React pages built
+  from one shared package (`clients/shared`) in a pnpm workspace. They are HTTP
+  clients of the shell API and import nothing from the backend, so
+  `node clients/chat_1/server.js` runs from a clone with no repo config at all.
+  `chat_1` carries the priority and burst controls, `chat_2` the multi-line
+  transcript input and token counter; the rest are plain chat.
 - `dashboard/` is the operator view. It also imports nothing from the backend, but
   it does read `$EDGE_STATE_DIR`, so it has to run on the same host.
 
@@ -161,7 +165,7 @@ move and could never see a process it had not been told about. A new client join
 the list by writing one file, with no dashboard change.
 
 The name carries the tier, which is also how each stop script knows what is its
-own: `backend-supervisor`, `backend-worker-0`, `client-document-qa`, `dashboard`.
+own: `backend-supervisor`, `backend-worker-0`, `client-chat_1`, `dashboard`.
 
 Logs are the one thing that does **not** live there. Each process writes
 `$EDGE_LOG_DIR/<name>.log`, which defaults to `logs/` at the repo root: pidfiles are
@@ -230,7 +234,7 @@ running (504, `phase: "execution"`). The execution one aborts the job's `AbortCo
 ### MFEs never see the agent
 
 MFEs are served from their own ports and receive only `shellApiBase`, injected at runtime through a
-generated `/config.js` (`clients/document-qa/server.js:25-33`). The api-server binds `127.0.0.1` only.
+generated `/config.js` (`clients/chat_1/server.js`). The api-server binds `127.0.0.1` only.
 The shell enforces an origin allowlist from `EDGE_ALLOWED_MFE_ORIGINS`. A new MFE port must be added
 to that variable or CORS silently drops its requests.
 
