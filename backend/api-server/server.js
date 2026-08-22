@@ -129,6 +129,7 @@ const workerSocketPrefix = requiredEnv('EDGE_WORKER_SOCKET_PREFIX');
 const workerConnectTimeoutMs = numberEnv('EDGE_WORKER_CONNECT_TIMEOUT_MS');
 const workerRecoveryMs = numberEnv('EDGE_WORKER_RECOVERY_MS');
 const workerRecoveryAttempts = numberEnv('EDGE_WORKER_RECOVERY_ATTEMPTS');
+const workerStartupGraceMs = numberEnv('EDGE_WORKER_STARTUP_GRACE_MS');
 const supervisorSocketPath =
   args['supervisor-socket'] || requiredEnv('EDGE_API_NOTIFY_SOCK');
 const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
@@ -144,6 +145,7 @@ const workerPool = new WorkerPool({
   connectTimeoutMs: workerConnectTimeoutMs,
   recoveryMs: workerRecoveryMs,
   recoveryAttempts: workerRecoveryAttempts,
+  startupGraceMs: workerStartupGraceMs,
 });
 
 registerInferRoutes(app, workerPool);

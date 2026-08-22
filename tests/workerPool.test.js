@@ -209,3 +209,72 @@ test('isTransportFailure separates a dead socket from a worker that answered wit
   assert.ok(!WorkerPool.isTransportFailure('no_ready_workers'));
   assert.ok(!WorkerPool.isTransportFailure(undefined));
 });
+
+test('a worker whose socket never appears stops reading as starting once the grace is up', async () => {
+  const pool = makePool({ startupGraceMs: 30 });
+  const worker = pool.workers.get(0);
+  assert.equal(worker.status, 'starting');
+
+  await sleep(40);
+  pool._refreshWorkerReadiness();
+
+  assert.equal(worker.status, 'crashed');
+  assert.equal(worker.recoveryAttempt, 1);
+});
+
+test('a worker still inside its grace window is left alone', () => {
+  const pool = makePool({ startupGraceMs: 10000 });
+  pool._refreshWorkerReadiness();
+  assert.equal(pool.workers.get(0).status, 'starting');
+});
+
+test('getHealth reports the failed worker without a request having been made', async () => {
+  const pool = makePool({ startupGraceMs: 30 });
+  assert.equal(pool.getHealth().workers[0].status, 'starting');
+
+  await sleep(40);
+
+  assert.equal(pool.getHealth().workers[0].status, 'crashed');
+});
+
+test('a worker that binds inside the grace window becomes ready and keeps its clock', async () => {
+  const pool = makePool({ startupGraceMs: 60 });
+  const worker = pool.workers.get(0);
+  await listenOn(worker.socketPath);
+
+  pool._refreshWorkerReadiness();
+  assert.equal(worker.status, 'ready');
+
+  await sleep(70);
+  pool._refreshWorkerReadiness();
+  assert.equal(worker.status, 'ready');
+});
+
+test('the grace clock restarts for the replacement a supervisor announces', async () => {
+  const pool = makePool({ startupGraceMs: 60, recoveryMs: 10000 });
+  const worker = pool.workers.get(0);
+  await sleep(40);
+
+  pool.handleSupervisorMessage({ type: 'worker_restarted', workerId: 0 });
+  assert.equal(worker.status, 'crashed');
+
+  clearTimeout(worker.recoveryTimer);
+  worker.recoveryTimer = null;
+  worker.status = 'starting';
+  pool._refreshWorkerReadiness();
+
+  assert.equal(worker.status, 'starting');
+});
+
+test('a pool cannot be built with a startup grace that never expires', () => {
+  assert.throws(
+    () =>
+      new WorkerPool({
+        workerCount: 1,
+        workerSocketPrefix: '/tmp/edge-grace-',
+        connectTimeoutMs: 50,
+        startupGraceMs: 0,
+      }),
+    /positive startupGraceMs/
+  );
+});

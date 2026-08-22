@@ -46,6 +46,22 @@ target_compile_definitions(edge-worker-json-tests
 
 target_link_libraries(edge-worker-json-tests PRIVATE Threads::Threads rt)
 
+add_executable(edge-model-cache-tests
+  testMain.cpp
+  modelCacheHandshakeTests.cpp
+)
+
+target_include_directories(edge-model-cache-tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+)
+
+target_compile_definitions(edge-model-cache-tests
+  PRIVATE EDGE_TEST_SUITE_NAME="model cache ready handshake"
+)
+
 add_executable(edge-hardware-tests
   testMain.cpp
   capacityPlanTests.cpp

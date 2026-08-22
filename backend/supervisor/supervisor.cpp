@@ -2,6 +2,7 @@
 
 #include "workerReassignment.h"
 
+#include "../ipc/modelReady.h"
 #include "../ipc/paths.h"
 #include "../model-cache/model_cache.h"
 
@@ -296,12 +297,15 @@ bool Supervisor::setupSupervisorSocket() {
 }
 
 bool Supervisor::startModelCache() {
+  runNonce_ = EdgeIPC::generateRunNonce();
   const std::vector<std::string> args = {
       config_.modelCacheBinary,
       "--model-path",
       config_.modelPath,
       "--shm-name",
       config_.shmName,
+      "--run-nonce",
+      std::to_string(runNonce_),
   };
   const pid_t pid = forkExec(args);
   if (pid <= 0) {
@@ -314,7 +318,7 @@ bool Supervisor::startModelCache() {
   info.command = args;
   writePidFile(pidFileNameFor(info), pid);
   processesByPid_[pid] = std::move(info);
-  std::cerr << "[supervisor] started model-cache pid=" << pid << '\n';
+  std::cerr << "[supervisor] started model-cache pid=" << pid << " runNonce=" << runNonce_ << '\n';
   return true;
 }
 
@@ -322,33 +326,33 @@ bool Supervisor::waitForModelReady() const {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(config_.modelReadyTimeoutSeconds);
   const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
+  bool reportedForeignRun = false;
 
   while (running_.load() && std::chrono::steady_clock::now() < deadline) {
-    const int fd = shm_open(metaName.c_str(), O_RDONLY, 0666);
-    if (fd < 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      continue;
-    }
+    EdgeIPC::ModelReadyState state = EdgeIPC::ModelReadyState::kMalformed;
 
-    struct stat st {};
-    if (fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(SharedModelHeader))) {
-      void* mapped =
-          mmap(nullptr, sizeof(SharedModelHeader), PROT_READ, MAP_SHARED, fd, 0);
-      if (mapped != MAP_FAILED) {
-        const auto* header = static_cast<const SharedModelHeader*>(mapped);
-        const bool validMagic = std::memcmp(header->magic, "EDGE", 4) == 0;
-        const bool isReady = header->ready == 1;
-        munmap(mapped, sizeof(SharedModelHeader));
-        close(fd);
-        if (validMagic && isReady) {
-          return true;
+    const int fd = shm_open(metaName.c_str(), O_RDONLY, 0666);
+    if (fd >= 0) {
+      struct stat st {};
+      if (fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(SharedModelHeader))) {
+        void* mapped = mmap(nullptr, sizeof(SharedModelHeader), PROT_READ, MAP_SHARED, fd, 0);
+        if (mapped != MAP_FAILED) {
+          state = EdgeIPC::evaluateModelHeader(mapped, sizeof(SharedModelHeader), runNonce_);
+          munmap(mapped, sizeof(SharedModelHeader));
         }
-      } else {
-        close(fd);
       }
-    } else {
       close(fd);
     }
+
+    if (state == EdgeIPC::ModelReadyState::kReady) {
+      return true;
+    }
+    if (state == EdgeIPC::ModelReadyState::kForeignRun && !reportedForeignRun) {
+      reportedForeignRun = true;
+      std::cerr << "[supervisor] ignoring shared model metadata from another run, waiting for "
+                << "runNonce=" << runNonce_ << '\n';
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   return false;

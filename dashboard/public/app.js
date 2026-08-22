@@ -34,8 +34,6 @@ function statWithDot(label, value, dot) {
     return `<div><div class="k">${esc(label)}</div><div class="v"><span class="dot ${dot}"></span>${esc(value)}</div></div>`;
 }
 
-// The dot repeats what the value already says in words, so colour is never the
-// only signal.
 function row(name, value, dot = "", valueCls = "") {
     return `<div><span class="dot ${dot}"></span><span class="name">${esc(name)}</span><span class="val ${valueCls}">${esc(value)}</span></div>`;
 }

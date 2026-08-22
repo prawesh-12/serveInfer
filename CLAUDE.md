@@ -88,7 +88,7 @@ default, so `node clients/document-qa/server.js` works from a clone with no repo
 
 ### Tests, lint, CI
 
-291 tests, no new dependencies: 85 JavaScript and 206 C++. `node:test` for the JavaScript
+308 tests, no new dependencies: 91 JavaScript and 217 C++. `node:test` for the JavaScript
 in `tests/`, a small assert harness for the C++ in `backend/inference-worker/tests/`. Nothing needs the model file, a GPU
 or a running stack.
 
@@ -115,14 +115,15 @@ ls -l /dev/shm/edge-model-weights   # one shared copy, not one per worker
 Browser: Doc Q&A `:5002` (press "Burst LOW x5" to see queue positions), Meeting Summariser `:5001`
 (streaming), status dashboard `:3001`.
 
-The C++ side is four binaries: `edge-device-tests` (28, ladder and vendor error mapping),
+The C++ side is five binaries: `edge-device-tests` (28, ladder and vendor error mapping),
 `edge-worker-json-tests` (15, frame parsing), `edge-hardware-tests` (131, capacity
 planning, backend assignment, the CUDA environment guarantee, the NPU/ANE state machines
 driven through injectable fakes, worker reassignment, fault injection, and the streaming
 contract across a fallback) and `edge-remote-recovery-tests` (32, the remote tier's two
 policy gates and the climb back up the ladder, all through an injected fake transport that
-opens no socket).
-`make test-cpp` builds and runs all four.
+opens no socket) and `edge-model-cache-tests` (11, the shm ready handshake: a stale flag, a
+foreign nonce, a malformed header and the header's byte layout).
+`make test-cpp` builds and runs all five.
 
 Already covered by the suites: scheduler priority and aging
 (`backend/shell-app/scheduler.js:196-205`), the worker's regex JSON parsing
@@ -183,8 +184,9 @@ dashboard or the clients. Killing it leaves all of them running, which is now th
 point rather than a surprise. `scripts/backend.sh stop` clears both trees plus any
 leftover port listener.
 
-Startup order is strict: model-cache must publish `ready=1` in the shm header before the api-server
-or any worker starts (`Supervisor::waitForModelReady`, 30 s timeout).
+Startup order is strict: model-cache must publish `ready=1` **under this run's nonce** before the
+api-server or any worker starts (`Supervisor::waitForModelReady`, 30 s timeout). See
+"The model is loaded once" below for why the flag alone is not enough.
 
 ### The request path
 
@@ -215,6 +217,11 @@ degrades safely — a pool entry whose socket is absent never becomes ready, so 
 out — but the failure shape is wrong: the scheduler admits a request against a slot count that
 assumes the ceiling, and the api-server then answers 503 `no_ready_workers` instead of the
 request queueing. Not fixed; wiring the effective count into `WorkerPool` is the fix.
+
+`starting` is not a resting state. A pool entry whose socket has not appeared within
+`EDGE_WORKER_STARTUP_GRACE_MS` is marked `crashed` and handed to the ordinary recovery probe, so a
+worker that died on model load stops reading as a slow boot. `getHealth` refreshes before it
+answers, which is what makes the dashboard show it.
 
 Two timeouts bound a request, and the SSE `timeout` event carries `phase` to tell them apart:
 `EDGE_QUEUE_TIMEOUT_MS` while queued (408, `phase: "queue"`) and `EDGE_EXEC_TIMEOUT_MS` while
@@ -317,8 +324,19 @@ at boot, surfacing under `/health` as `requests.orphanedFromPreviousRun`. It rep
 
 ### The model is loaded once, into /dev/shm
 
-`edge-model-cache` copies the GGUF into POSIX shared memory and publishes size, FNV-1a checksum and
-a ready flag in the `.meta` header. Each worker validates that header, mmaps the segment, then
+`edge-model-cache` copies the GGUF into POSIX shared memory and publishes size, FNV-1a checksum,
+a run nonce and a ready flag in the `.meta` header.
+
+**The ready flag alone is not a handshake.** The shm objects outlive the run that made them, so a
+stack that died without cleanup leaves `ready=1` on display. The supervisor used to accept it and
+start workers against a segment the new model-cache was still zero-filling; every worker died on
+`invalid magic characters` and the breaker opened. Now the supervisor draws a fresh nonce on every
+`startModelCache()` (restarts included), passes it as `--run-nonce`, and `EdgeIPC::evaluateModelHeader`
+(`backend/ipc/modelReady.h`) treats `ready=1` under any other nonce as another run's business.
+`shm_unlink` is cleanup, never the correctness mechanism. The nonce came out of the header's
+reserved bytes, so `SharedModelHeader` is still 256 bytes and every older field kept its offset.
+
+Each worker validates that header, mmaps the segment, then
 **repoints its own model path at `/dev/shm/...`** (`backend/inference-worker/worker.cpp:231-234`) so llama
 loads from shared memory rather than disk. This is what makes a worker restart cheaper than a cold
 start, and why N workers don't cost N × 2.3 GB.

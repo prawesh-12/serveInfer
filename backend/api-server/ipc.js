@@ -20,6 +20,7 @@ class WorkerPool {
     this.connectTimeoutMs = Number(options.connectTimeoutMs);
     this.recoveryMs = Number(options.recoveryMs ?? 2000);
     this.recoveryAttempts = Number(options.recoveryAttempts ?? 10);
+    this.startupGraceMs = Number(options.startupGraceMs ?? 15000);
     if (!Number.isInteger(this.workerCount) || this.workerCount <= 0) {
       throw new Error('WorkerPool requires a positive workerCount');
     }
@@ -28,6 +29,9 @@ class WorkerPool {
     }
     if (!Number.isFinite(this.connectTimeoutMs) || this.connectTimeoutMs <= 0) {
       throw new Error('WorkerPool requires a positive connectTimeoutMs');
+    }
+    if (!Number.isFinite(this.startupGraceMs) || this.startupGraceMs <= 0) {
+      throw new Error('WorkerPool requires a positive startupGraceMs');
     }
     this.workers = new Map();
     this.inFlight = new Map();
@@ -40,11 +44,13 @@ class WorkerPool {
         status: 'starting',
         recoveryTimer: null,
         recoveryAttempt: 0,
+        startedAt: Date.now(),
       });
     }
   }
 
   getHealth() {
+    this._refreshWorkerReadiness();
     const workers = Array.from(this.workers.values()).map((w) => ({
       id: w.workerId,
       status: w.status,
@@ -75,6 +81,7 @@ class WorkerPool {
         clearTimeout(worker.recoveryTimer);
         worker.recoveryTimer = null;
         worker.recoveryAttempt = 0;
+        worker.startedAt = Date.now();
         worker.status = 'crashed';
         this._scheduleRecoveryProbe(msg.workerId);
       }
@@ -86,6 +93,7 @@ class WorkerPool {
         clearTimeout(worker.recoveryTimer);
         worker.recoveryTimer = null;
         worker.recoveryAttempt = 0;
+        worker.startedAt = Date.now();
         worker.status = 'ready';
       }
     }
@@ -264,12 +272,29 @@ class WorkerPool {
     return worker;
   }
 
+  // A worker that never binds its socket has to stop reading as 'starting' eventually, or a
+  // model-load failure looks like a slow boot forever. Past the grace it becomes crashed and
+  // the ordinary recovery probe owns it from there.
   _refreshWorkerReadiness() {
+    const now = Date.now();
     for (const worker of this.workers.values()) {
       if (worker.status === 'busy' || worker.status === 'crashed') {
         continue;
       }
-      worker.status = fs.existsSync(worker.socketPath) ? 'ready' : 'starting';
+      if (fs.existsSync(worker.socketPath)) {
+        worker.status = 'ready';
+        worker.startedAt = now;
+        continue;
+      }
+      if (now - worker.startedAt >= this.startupGraceMs) {
+        worker.status = 'crashed';
+        clearTimeout(worker.recoveryTimer);
+        worker.recoveryTimer = null;
+        worker.recoveryAttempt = 0;
+        this._scheduleRecoveryProbe(worker.workerId);
+        continue;
+      }
+      worker.status = 'starting';
     }
   }
 
@@ -346,6 +371,7 @@ class WorkerPool {
         if (alive) {
           current.recoveryTimer = null;
           current.recoveryAttempt = 0;
+          current.startedAt = Date.now();
           current.status = 'ready';
           return;
         }

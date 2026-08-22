@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -113,6 +114,9 @@ class Supervisor {
   CapacityPlan plan_;
   std::vector<WorkerAssignment> assignments_;
   int effectiveWorkerCount_ = 0;
+  // Regenerated on every model-cache start, so a restart cannot be satisfied by the flag the
+  // previous cache left behind.
+  std::uint64_t runNonce_ = 0;
   std::atomic<bool> running_{false};
   int supervisorServerFd_ = -1;
   CircuitBreaker circuitBreaker_;

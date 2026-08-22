@@ -3,8 +3,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-// Imports nothing from the backend. Every value has a default, so this runs
-// standalone from a clone with no repo config.
+
 const port = Number(process.env.CLIENT_PORT || 5002);
 const shellApiBase = process.env.SHELL_API_BASE || 'http://127.0.0.1:3000';
 const publicDir = path.join(__dirname, 'public');

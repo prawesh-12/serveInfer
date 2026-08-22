@@ -71,8 +71,9 @@ test-js:
 test-cpp:
 	@echo "[test] c++ suites"
 	@cmake -S backend -B build/tests -DEDGE_ENABLE_LLAMA=OFF -DCMAKE_BUILD_TYPE=Release > /dev/null
-	@cmake --build build/tests --target edge-device-tests edge-worker-json-tests edge-hardware-tests edge-remote-recovery-tests -j"$$(nproc)" > /dev/null
+	@cmake --build build/tests --target edge-device-tests edge-worker-json-tests edge-hardware-tests edge-remote-recovery-tests edge-model-cache-tests -j"$$(nproc)" > /dev/null
 	@./build/tests/inference-worker/tests/edge-device-tests
 	@./build/tests/inference-worker/tests/edge-worker-json-tests
 	@./build/tests/inference-worker/tests/edge-hardware-tests
 	@./build/tests/inference-worker/tests/edge-remote-recovery-tests
+	@./build/tests/inference-worker/tests/edge-model-cache-tests
