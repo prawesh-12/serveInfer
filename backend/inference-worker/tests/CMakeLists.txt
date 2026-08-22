@@ -28,6 +28,7 @@ add_executable(edge-worker-json-tests
   ../deviceLadder.cpp
   ../deviceBackends.cpp
   ../inferenceBackend.cpp
+  ../remoteTransport.cpp
   ../backendRouter.cpp
   ../inferEngine.cpp
   ../gpuResourceOwner.cpp
@@ -70,6 +71,7 @@ add_executable(edge-hardware-tests
   ../deviceLadder.cpp
   ../deviceBackends.cpp
   ../inferenceBackend.cpp
+  ../remoteTransport.cpp
   ../backendRouter.cpp
   ../inferEngine.cpp
   ../gpuResourceOwner.cpp
@@ -98,6 +100,7 @@ add_executable(edge-remote-recovery-tests
   ../deviceLadder.cpp
   ../deviceBackends.cpp
   ../inferenceBackend.cpp
+  ../remoteTransport.cpp
   ../backendRouter.cpp
   ../inferEngine.cpp
   ../gpuResourceOwner.cpp

@@ -144,10 +144,15 @@ ProbeResult probeAccelerate() {
 #endif
 }
 
-// Needs an endpoint AND an explicit opt-in: this one sends the transcript off the device.
+bool envIsSet(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0';
+}
+
+// Two independent facts: somewhere to send it, and permission to send it. A credential
+// sitting in the environment is not consent, so the opt-in stays its own variable.
 ProbeResult probeRemote() {
-  const char* endpoint = std::getenv("EDGE_REMOTE_ENDPOINT");
-  if (endpoint == nullptr || endpoint[0] == '\0') {
+  if (!envIsSet("EDGE_SARVAM_API_KEY") && !envIsSet("EDGE_REMOTE_ENDPOINT")) {
     return ProbeResult::kRuntimeMissing;
   }
   const char* allow = std::getenv("EDGE_REMOTE_FALLBACK_ALLOWED");
@@ -168,7 +173,7 @@ const DeviceBackend kBackends[] = {
     {"ane", "macos", "CoreML.framework", "Apple Neural Engine", probeAne},
     {"metal", "macos", "Metal.framework", "Apple GPU tier", probeMetal},
     {"accelerate", "macos", "Accelerate.framework", "Apple CPU tier", probeAccelerate},
-    {"remote", "any", "EDGE_REMOTE_ENDPOINT", "cloud API, opt-in only", probeRemote},
+    {"remote", "any", "EDGE_SARVAM_API_KEY", "cloud API, opt-in only", probeRemote},
 };
 
 constexpr std::size_t kBackendCount = sizeof(kBackends) / sizeof(kBackends[0]);

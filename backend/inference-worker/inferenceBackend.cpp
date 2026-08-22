@@ -114,11 +114,6 @@ std::string remoteEndpoint() {
 
 }  // namespace
 
-// Empty on purpose: no response schema is provider-neutral, so deployments pass their own.
-RemoteTransport makeRemoteTransport() {
-  return {};
-}
-
 RemoteInferenceBackend::RemoteInferenceBackend(RemoteTransport transport)
     : transport_(std::move(transport)) {}
 
@@ -152,13 +147,14 @@ BackendExecution RemoteInferenceBackend::execute(const std::string& prompt,
   }
   if (policy != ProbeResult::kAvailable) {
     result.fault = DeviceFault::kUnavailable;
-    result.detail = "remote endpoint is not configured (EDGE_REMOTE_ENDPOINT is empty)";
+    result.detail =
+        "remote is not configured (neither EDGE_SARVAM_API_KEY nor EDGE_REMOTE_ENDPOINT is set)";
     return result;
   }
   if (!transport_) {
     return notCompiledIn(
-        "no remote transport is compiled into this build (see makeRemoteTransport in "
-        "inferenceBackend.cpp); the tier is configured but nothing can serve it");
+        "no remote transport was built for this worker (EDGE_SARVAM_API_KEY was empty at "
+        "startup); the tier is configured but nothing can serve it");
   }
 
   RemoteRequest request;

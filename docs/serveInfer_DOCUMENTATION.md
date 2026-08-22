@@ -1854,7 +1854,7 @@ them.
 
 | Variable | Default | Meaning | If missing or wrong |
 |---|---|---|---|
-| `EDGE_DEVICE_LADDER` | `cuda,cpu` | tier names, highest first | worker falls back to the compiled `{"cuda","cpu"}`, an empty parse becomes `{"cpu"}` |
+| `EDGE_DEVICE_LADDER` | `cuda,npu,ane,cpu,remote` | tier names, highest first | worker falls back to the compiled `{"cuda","npu","ane","cpu","remote"}`, an empty parse becomes `{"cpu"}` |
 | `EDGE_DEVICE_QUARANTINE_MS` | `60000` | how long a faulted tier stays out | compiled default 60000 |
 | `EDGE_DEVICE_PROBE_INTERVAL_MS` | `5000` | stored and never read, see section 9 | no effect |
 

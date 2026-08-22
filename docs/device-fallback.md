@@ -342,9 +342,11 @@ flowchart TD
 The remote tier is deliberately last and deliberately optional. An on-device runtime that
 silently ships a user's meeting transcript to a cloud API on a driver hiccup would be a
 worse failure than returning an error. So it is gated twice, and both gates are read on
-every execute, not cached: `EDGE_REMOTE_ENDPOINT` must name somewhere to send the prompt,
-**and** `EDGE_REMOTE_FALLBACK_ALLOWED=1` must record that someone decided it may leave.
-Endpoint without opt-in probes `policy_disabled` and the tier is skipped.
+every execute, not cached: `EDGE_SARVAM_API_KEY` or `EDGE_REMOTE_ENDPOINT` must give it
+somewhere to send the prompt, **and** `EDGE_REMOTE_FALLBACK_ALLOWED=1` must record that
+someone decided it may leave. Either one without the opt-in probes `policy_disabled` and
+the tier is skipped. The two questions are kept apart on purpose: a credential sitting in
+the environment for some other reason is not consent to send a transcript off the device.
 
 `RemoteInferenceBackend` (in `inferenceBackend.cpp`, beside the Qualcomm and Core ML
 adapters) is the adapter behind it. It is deliberately provider-neutral: it passes
@@ -363,14 +365,28 @@ success, `400/413/415/422` is `kUnsupportedOp` (this request, not this endpoint)
 means hardware vanished, and treating one that way would make remote session-fatal for a
 passing 503.
 
-**What this build ships is the seam, not a client.** `makeRemoteTransport()` returns an
-empty transport, so a fully configured remote tier probes `runtime_missing` and the
-adapter says why. That is a deliberate choice over hand-rolling an HTTP client and a
-response parser: the parser is the part that cannot be provider-neutral, since every
-vendor puts the generated text somewhere different, and writing one against a guessed
-schema is exactly the fabricated backend support this project refuses to ship. A deployment that wants real
-remote fallback supplies its own transport at the single registration site in
-`Worker::selectDevice`. **No real external service has been tested.**
+**What fills the seam is the official Sarvam Node SDK, reached through a child process.**
+The worker is C++ and cannot call a Node SDK in-process, so `makeRemoteTransport()`
+spawns `backend/remote/sarvamTransport.js` the same way the supervisor spawns its
+hardware probe: fork, exec, poll to a deadline, `SIGKILL` what overruns it. One JSON
+request goes in on stdin, one JSON response line comes back on stdout, and the child dies
+with the request. Writing is polled too, so a child that never reads its stdin cannot
+wedge the worker on a large prompt. That beats hand-rolling an HTTP client and guessing a
+response schema — the vendor's own client owns both — at the cost of one process per
+remote call, which is a rung reached only after every local tier has already failed.
+
+Without `EDGE_SARVAM_API_KEY` there is no transport at all: `makeRemoteTransport()`
+returns empty rather than building one that fails per request, so a configured tier
+refuses by name before anything is forked. The child maps its own failures onto the same
+status vocabulary — `401` for a missing key, the SDK's `statusCode` for a typed API
+error, `504` for `SarvamAITimeoutError`, `0` for a call that never reached a server — and
+the parent adds `504` when it has to kill a hung child. Model, temperature, `top_p` and
+`max_tokens` come from `EDGE_SARVAM_*`, and the SDK's own retry is turned off because the
+ladder owns retry and a hidden one inside a rung hides the fault.
+
+**No live call to Sarvam has been made.** Every test drives either the injected
+`RemoteTransport` fake, a fake child script in place of node, or the helper against a
+stubbed SDK module.
 
 Ownership: the adapter implements `GpuResourceOwner` like the engine does, rather
 than inventing a second cleanup vocabulary. What it owns is a transport session, and
@@ -395,7 +411,7 @@ Every name `EDGE_DEVICE_LADDER` accepts, and what its probe actually checks:
 | `ane` | macos | `CoreML.framework` **and** an ANE service | A4's Neural Engine. An Intel Mac has the framework but no engine, so both are checked |
 | `metal` | macos | `Metal.framework` | |
 | `accelerate` | macos | `Accelerate.framework` | |
-| `remote` | any | `EDGE_REMOTE_ENDPOINT` set **and** `EDGE_REMOTE_FALLBACK_ALLOWED=1` | off unless both are true |
+| `remote` | any | `EDGE_SARVAM_API_KEY` or `EDGE_REMOTE_ENDPOINT` set **and** `EDGE_REMOTE_FALLBACK_ALLOWED=1` | off unless both are true |
 
 A probe answers *why*, not just no, and `/health` carries the reason:
 `available`, `wrong_platform`, `runtime_missing`, `device_missing`, `policy_disabled`.

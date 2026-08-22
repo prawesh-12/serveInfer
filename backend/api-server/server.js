@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const express = require('express');
-const { numberEnv, requiredEnv } = require('../config/env');
+const { loadEnv, numberEnv, requiredEnv } = require('../config/env');
 const { WorkerPool } = require('./ipc');
+const { resolveWorkerCount, logWorkerCountDecision } = require('./workerCountSource');
 const { registerInferRoutes, registry } = require('./routes/infer');
 
 const LOG_LEVELS = {
@@ -119,7 +120,16 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
 
 const args = parseArgs(process.argv);
 const port = Number(args.port || numberEnv('EDGE_API_PORT'));
-const workerCount = numberEnv('EDGE_WORKER_COUNT');
+// EDGE_WORKER_COUNT is the ceiling the operator asked for. The supervisor
+// publishes the count it could actually place, so prefer that and size the pool
+// to the workers that really exist. Optional env: read it directly rather than
+// through requiredEnv, because the api-server must still boot standalone.
+loadEnv();
+const workerCountDecision = resolveWorkerCount({
+  configuredCount: numberEnv('EDGE_WORKER_COUNT'),
+  modelConfigPath: args['model-config'] || process.env.EDGE_MODEL_CONFIG_PATH || null,
+});
+const workerCount = workerCountDecision.workerCount;
 const workerSocketPrefix = requiredEnv('EDGE_WORKER_SOCKET_PREFIX');
 const workerConnectTimeoutMs = numberEnv('EDGE_WORKER_CONNECT_TIMEOUT_MS');
 const workerRecoveryMs = numberEnv('EDGE_WORKER_RECOVERY_MS');
@@ -127,6 +137,8 @@ const workerRecoveryAttempts = numberEnv('EDGE_WORKER_RECOVERY_ATTEMPTS');
 const supervisorSocketPath =
   args['supervisor-socket'] || requiredEnv('EDGE_API_NOTIFY_SOCK');
 const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
+
+logWorkerCountDecision(logger, workerCountDecision);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));

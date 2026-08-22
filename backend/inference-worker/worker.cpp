@@ -11,6 +11,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -56,6 +57,33 @@ bool extractString(const std::string& json, const std::string& key, std::string&
   }
   out = std::move(unescaped);
   return true;
+}
+
+bool isLocalAccelerator(const std::string& tier) {
+  return tier == "cuda" || tier == "rocm" || tier == "vulkan" || tier == "metal" ||
+         tier == "npu" || tier == "ane" || tier == "directml" || tier == "gpu";
+}
+
+// The supervisor rations only cuda, so a worker it gave no gpu slot still keeps
+// the npu and ane rungs; EDGE_FORCE_CPU is the stronger statement that drops
+// every local accelerator. Either way the cpu floor and remote survive.
+std::vector<std::string> ladderFrom(const std::vector<std::string>& configured, bool noGpuSlot,
+                                    bool forceCpu) {
+  if (!noGpuSlot && !forceCpu) {
+    return configured;
+  }
+  std::vector<std::string> kept;
+  kept.reserve(configured.size());
+  for (const std::string& tier : configured) {
+    if (forceCpu ? isLocalAccelerator(tier) : tier == "cuda") {
+      continue;
+    }
+    kept.push_back(tier);
+  }
+  if (std::find(kept.begin(), kept.end(), "cpu") == kept.end()) {
+    kept.push_back("cpu");
+  }
+  return kept;
 }
 
 bool extractBool(const std::string& json, const std::string& key, bool defaultValue) {
@@ -256,10 +284,8 @@ bool Worker::attachSharedMemory() {
 }
 
 bool Worker::selectDevice() {
-  std::vector<std::string> order = config_.deviceLadder;
-  if (config_.forceCpu || config_.assignedBackend == "cpu") {
-    order = {"cpu"};
-  }
+  const std::vector<std::string> order =
+      ladderFrom(config_.deviceLadder, config_.assignedBackend == "cpu", config_.forceCpu);
   router_ = std::make_unique<BackendRouter>(order, config_.deviceQuarantineMs,
                                             config_.deviceProbeIntervalMs);
   hexagonBackend_ = std::make_shared<QualcommHexagonBackend>();

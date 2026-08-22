@@ -11,6 +11,7 @@ add_executable(edge-inference-worker
   deviceLadder.cpp
   deviceBackends.cpp
   inferenceBackend.cpp
+  remoteTransport.cpp
   backendRouter.cpp
   inferEngine.cpp
   gpuResourceOwner.cpp

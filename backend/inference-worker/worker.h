@@ -32,7 +32,7 @@ struct WorkerConfig {
   float temperature = 0.8f;
   int gpuLayers = 99;
   int seed = 42;
-  std::vector<std::string> deviceLadder{"cuda", "cpu"};
+  std::vector<std::string> deviceLadder{"cuda", "npu", "ane", "cpu", "remote"};
   int deviceQuarantineMs = 60000;
   int deviceProbeIntervalMs = 5000;
 

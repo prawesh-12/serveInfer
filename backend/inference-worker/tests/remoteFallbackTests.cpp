@@ -4,9 +4,15 @@
 #include "../deviceBackends.h"
 #include "../deviceLadder.h"
 #include "../inferenceBackend.h"
+#include "../remoteTransport.h"
+
+#include <unistd.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,19 +58,66 @@ class EnvGuard {
 struct RemotePolicy {
   EnvGuard endpoint{"EDGE_REMOTE_ENDPOINT"};
   EnvGuard allowed{"EDGE_REMOTE_FALLBACK_ALLOWED"};
+  // Held so a real key in the developer's own environment cannot reach any case here.
+  EnvGuard apiKey{"EDGE_SARVAM_API_KEY"};
 
   void allow() const {
     endpoint.set("https://example.invalid/v1/infer");
     allowed.set("1");
+    apiKey.clear();
   }
   void endpointOnly() const {
     endpoint.set("https://example.invalid/v1/infer");
     allowed.clear();
+    apiKey.clear();
+  }
+  void keyOnly() const {
+    endpoint.clear();
+    allowed.clear();
+    apiKey.set("test-key-never-sent");
+  }
+  void keyAllowed() const {
+    endpoint.clear();
+    allowed.set("1");
+    apiKey.set("test-key-never-sent");
   }
   void none() const {
     endpoint.clear();
     allowed.clear();
+    apiKey.clear();
   }
+};
+
+// Stands in for the node child: same argv shape, same one-line stdout contract.
+class FakeChildScript {
+ public:
+  explicit FakeChildScript(const std::string& tag, const std::string& body)
+      : path_("/tmp/edge-remote-transport-" + tag + "-" + std::to_string(getpid()) + ".sh"),
+        recorded_(path_ + ".req") {
+    std::ofstream out(path_);
+    out << "#!/bin/sh\n" << body;
+  }
+
+  ~FakeChildScript() {
+    std::remove(path_.c_str());
+    std::remove(recorded_.c_str());
+  }
+
+  const std::string& path() const {
+    return path_;
+  }
+  const std::string& recordedPath() const {
+    return recorded_;
+  }
+
+  std::string recorded() const {
+    std::ifstream in(recorded_);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+
+ private:
+  std::string path_;
+  std::string recorded_;
 };
 
 // The injected fake transport; it never leaves the process.
@@ -313,12 +366,12 @@ EDGE_TEST(remote_is_only_reached_after_every_local_tier_has_failed,
 }
 
 EDGE_TEST(a_configured_remote_tier_with_no_transport_falls_through_instead_of_lying,
-          "the tier this build actually ships is configured-but-not-servable, so the router "
+          "an endpoint with no credential is configured-but-not-servable, so the router "
           "routes past it rather than crediting it with an answer") {
   const RemotePolicy policy;
   policy.allow();
 
-  // makeRemoteTransport() is what Worker::selectDevice registers; it is empty in this build.
+  // makeRemoteTransport() is what Worker::selectDevice registers; with no key it builds nothing.
   RemoteInferenceBackend shipped(makeRemoteTransport());
   CHECK(!shipped.executable());
   CHECK_EQ(std::string(probeResultName(shipped.available())), std::string("runtime_missing"));
@@ -326,6 +379,7 @@ EDGE_TEST(a_configured_remote_tier_with_no_transport_falls_through_instead_of_ly
   CHECK(!refused.ok());
   CHECK(refused.fault == DeviceFault::kUnavailable);
   CHECK(refused.detail.find("no remote transport") != std::string::npos);
+  CHECK(refused.detail.find("EDGE_SARVAM_API_KEY") != std::string::npos);
   CHECK(refused.text.empty());
 }
 
@@ -671,4 +725,223 @@ EDGE_TEST(a_tier_change_can_be_told_apart_from_a_fallback_by_ladder_position,
 
   CHECK(ladder.indexOf("cpu") > ladder.indexOf("cuda"));
   CHECK(ladder.indexOf("cpu") < ladder.indexOf("remote"));
+}
+
+// Everything below covers the real Sarvam transport. It runs a fake child script in
+// place of node, so no case here loads the SDK, needs a key or reaches a network.
+
+namespace {
+
+struct ChildEnv {
+  EnvGuard nodeBin{"EDGE_NODE_BIN"};
+  EnvGuard script{"EDGE_REMOTE_TRANSPORT_SCRIPT"};
+  EnvGuard timeout{"EDGE_REMOTE_TIMEOUT_MS"};
+
+  void pointAt(const FakeChildScript& fake, const char* timeoutMs) const {
+    nodeBin.set("/bin/sh");
+    script.set(fake.path().c_str());
+    timeout.set(timeoutMs);
+  }
+};
+
+}  // namespace
+
+EDGE_TEST(an_api_key_is_what_configures_the_remote_tier_now_that_there_is_an_sdk,
+          "the sdk knows its own base url, so a credential alone configures the tier and "
+          "the opt-in still turns it on (fake transport, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  CHECK_EQ(std::string(probeResultName(probeDevice("remote"))), std::string("available"));
+
+  policy.none();
+  CHECK_EQ(std::string(probeResultName(probeDevice("remote"))), std::string("runtime_missing"));
+}
+
+EDGE_TEST(an_api_key_on_its_own_is_not_consent_to_send_the_prompt,
+          "a key sitting in the environment for some other reason must not silently switch "
+          "on off-device inference (fake transport, no network)") {
+  const RemotePolicy policy;
+  policy.keyOnly();
+
+  FakeTransport transport;
+  transport.reply.status = 200;
+  transport.reply.text = "leaked";
+  RemoteInferenceBackend remote(transport.asTransport());
+
+  CHECK_EQ(std::string(probeResultName(remote.available())), std::string("policy_disabled"));
+  const BackendExecution result = remote.execute("secret prompt", nullptr);
+  CHECK(!result.ok());
+  CHECK(result.fault == DeviceFault::kUnavailable);
+  CHECK(result.detail.find("EDGE_REMOTE_FALLBACK_ALLOWED") != std::string::npos);
+  CHECK_EQ(transport.calls, 0);
+}
+
+EDGE_TEST(a_missing_api_key_produces_no_transport_at_all_rather_than_a_failing_one,
+          "an unconfigured credential is answered before anything is spawned, so the tier "
+          "refuses by name and no child process is ever forked (fake transport, no network)") {
+  const RemotePolicy policy;
+  policy.allow();
+  CHECK(!makeRemoteTransport());
+
+  policy.keyAllowed();
+  CHECK(static_cast<bool>(makeRemoteTransport()));
+}
+
+EDGE_TEST(the_transport_request_line_survives_a_prompt_full_of_json_metacharacters,
+          "the child contract is hand-built JSON, so a prompt carrying quotes, backslashes "
+          "and newlines must survive it intact (fake transport, no network)") {
+  RemoteRequest request;
+  request.prompt = "say \"hi\"\nand a \\ backslash\ttoo";
+  request.endpoint = "https://example.invalid/v1";
+
+  const std::string line = buildRemoteRequestJson(request);
+  CHECK(line.find("\\\"hi\\\"") != std::string::npos);
+  CHECK(line.find("\\n") != std::string::npos);
+  CHECK(line.find("\\\\") != std::string::npos);
+  CHECK_EQ(line.back(), '\n');
+
+  // The response direction uses the same escapes, so a round trip proves both halves.
+  RemoteResponse parsed;
+  CHECK(parseRemoteResponseJson(
+      "{\"status\":200,\"text\":\"say \\\"hi\\\"\\nand a \\\\ backslash\",\"error\":\"\"}\n",
+      parsed));
+  CHECK_EQ(parsed.status, 200L);
+  CHECK_EQ(parsed.text, std::string("say \"hi\"\nand a \\ backslash"));
+  CHECK(parsed.error.empty());
+}
+
+EDGE_TEST(the_transport_only_believes_a_response_line_it_can_actually_read,
+          "a child that prints nothing, or prints something without a status, is a failure "
+          "rather than an empty answer (fake transport, no network)") {
+  RemoteResponse parsed;
+  CHECK(!parseRemoteResponseJson("", parsed));
+  CHECK(!parseRemoteResponseJson("\n\n", parsed));
+  CHECK(!parseRemoteResponseJson("{\"text\":\"answer\"}\n", parsed));
+
+  // Only the last line counts: a child may log before it answers.
+  CHECK(parseRemoteResponseJson("noise\n{\"status\":429,\"text\":\"\",\"error\":\"rate limited\"}\n",
+                                parsed));
+  CHECK_EQ(parsed.status, 429L);
+  CHECK_EQ(parsed.error, std::string("rate limited"));
+  CHECK(parsed.text.empty());
+
+  CHECK(parseRemoteResponseJson("{\"status\":200,\"text\":\"caf\\u00e9\",\"error\":\"\"}", parsed));
+  CHECK_EQ(parsed.text, std::string("café"));
+}
+
+EDGE_TEST(the_real_transport_hands_the_prompt_to_its_child_and_returns_what_came_back,
+          "the shipped transport writes one request line to the child's stdin and reads one "
+          "response line back, with nothing invented in between (fake child, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  const FakeChildScript fake("ok", R"SH(cat > "$0.req"
+printf '{"status":200,"text":"cloud answer via child","error":""}\n'
+)SH");
+  const ChildEnv child;
+  child.pointAt(fake, "5000");
+
+  const RemoteTransport transport = makeRemoteTransport();
+  CHECK(static_cast<bool>(transport));
+
+  RemoteRequest request;
+  request.prompt = "summarise the meeting";
+  request.endpoint = "https://example.invalid/v1";
+  const RemoteResponse response = transport(request);
+
+  CHECK_EQ(response.status, 200L);
+  CHECK_EQ(response.text, std::string("cloud answer via child"));
+  CHECK(response.error.empty());
+  CHECK(fake.recorded().find("summarise the meeting") != std::string::npos);
+  CHECK(fake.recorded().find("https://example.invalid/v1") != std::string::npos);
+}
+
+EDGE_TEST(an_api_failure_from_the_child_becomes_a_fault_and_never_an_answer,
+          "the status the child reports is the status the adapter classifies, so a rate "
+          "limit degrades the tier instead of returning text (fake child, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  const FakeChildScript fake("err", R"SH(cat > "$0.req"
+printf '{"status":429,"text":"","error":"sarvam api error: rate limited"}\n'
+)SH");
+  const ChildEnv child;
+  child.pointAt(fake, "5000");
+
+  RemoteInferenceBackend remote(makeRemoteTransport());
+  const BackendExecution result = remote.execute("prompt", nullptr);
+
+  CHECK(!result.ok());
+  CHECK(result.fault == DeviceFault::kRuntimeError);
+  CHECK_EQ(result.vendorStatus, 429L);
+  CHECK_EQ(result.detail, std::string("sarvam api error: rate limited"));
+  CHECK(result.text.empty());
+}
+
+EDGE_TEST(a_hung_child_is_killed_at_the_deadline_instead_of_wedging_the_worker,
+          "a cloud call that never returns costs the worker one bounded wait and then reads "
+          "as a gateway timeout (fake child, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  const FakeChildScript fake("hang", "sleep 30\n");
+  const ChildEnv child;
+  child.pointAt(fake, "1");
+
+  const auto started = std::chrono::steady_clock::now();
+  RemoteInferenceBackend remote(makeRemoteTransport());
+  const BackendExecution result = remote.execute("prompt", nullptr);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - started);
+
+  CHECK(!result.ok());
+  CHECK(result.fault == DeviceFault::kRuntimeError);
+  CHECK_EQ(result.vendorStatus, 504L);
+  CHECK(result.detail.find("killed") != std::string::npos);
+  CHECK(result.text.empty());
+  CHECK(elapsed.count() < 5000);
+}
+
+EDGE_TEST(a_child_that_dies_without_answering_is_reported_rather_than_treated_as_empty,
+          "an exec failure or a crashed helper is a runtime fault naming the exit code, not "
+          "a successful empty completion (fake child, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  const FakeChildScript fake("dead", "exit 3\n");
+  const ChildEnv child;
+  child.pointAt(fake, "5000");
+
+  RemoteInferenceBackend remote(makeRemoteTransport());
+  const BackendExecution result = remote.execute("prompt", nullptr);
+
+  CHECK(!result.ok());
+  CHECK(result.fault == DeviceFault::kRuntimeError);
+  CHECK_EQ(result.vendorStatus, 0L);
+  CHECK(result.detail.find("exited 3") != std::string::npos);
+  CHECK(result.text.empty());
+}
+
+EDGE_TEST(the_real_transport_is_reached_only_after_every_local_tier_has_failed,
+          "the cloud stays the last rung with the shipped transport installed: no child is "
+          "spawned while any local tier answers (fake child, no network)") {
+  const RemotePolicy policy;
+  policy.keyAllowed();
+  const FakeChildScript fake("last", R"SH(cat > "$0.req"
+printf '{"status":200,"text":"cloud answer via child","error":""}\n'
+)SH");
+  const ChildEnv child;
+  child.pointAt(fake, "5000");
+
+  Rig rig = makeRig({"cuda", "cpu", "remote"}, 60000, 0, makeRemoteTransport());
+  CHECK(rig.router->select());
+  CHECK_EQ(rig.router->active(), std::string("cuda"));
+  CHECK(rig.router->route("local work", nullptr).ok());
+  CHECK(fake.recorded().empty());
+
+  rig["cuda"].nextFault = DeviceFault::kRuntimeError;
+  rig["cpu"].nextFault = DeviceFault::kRuntimeError;
+  const RouteResult routed = rig.router->route("everything local is gone", nullptr);
+
+  CHECK(routed.ok());
+  CHECK_EQ(routed.device, std::string("remote"));
+  CHECK_EQ(routed.text, std::string("cloud answer via child"));
+  CHECK(routed.degraded);
+  CHECK(fake.recorded().find("everything local is gone") != std::string::npos);
 }

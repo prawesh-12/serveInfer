@@ -91,3 +91,52 @@ EDGE_TEST(a_quoted_boolean_is_not_a_boolean,
           "a string that says true is not accepted as a boolean") {
   CHECK_EQ(extractBool(R"({"stream":"true"})", "stream", false), false);
 }
+
+const std::vector<std::string> kShippedLadder{"cuda", "npu", "ane", "cpu", "remote"};
+
+EDGE_TEST(a_gpu_worker_keeps_the_whole_priority_order,
+          "a worker given a gpu slot tries cuda, then npu, then ane, then cpu, then remote") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, false, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(5));
+  CHECK_EQ(order[0], std::string("cuda"));
+  CHECK_EQ(order[1], std::string("npu"));
+  CHECK_EQ(order[2], std::string("ane"));
+  CHECK_EQ(order[3], std::string("cpu"));
+  CHECK_EQ(order[4], std::string("remote"));
+}
+
+EDGE_TEST(a_worker_with_no_gpu_slot_keeps_the_npu_and_the_ane,
+          "the supervisor rations only cuda, so the other accelerators stay reachable") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, true, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(4));
+  CHECK_EQ(order[0], std::string("npu"));
+  CHECK_EQ(order[1], std::string("ane"));
+  CHECK_EQ(order[2], std::string("cpu"));
+  CHECK_EQ(order[3], std::string("remote"));
+}
+
+EDGE_TEST(force_cpu_drops_every_local_accelerator,
+          "EDGE_FORCE_CPU leaves only the cpu and the cloud rung below it") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, false, true);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(order[0], std::string("cpu"));
+  CHECK_EQ(order[1], std::string("remote"));
+}
+
+EDGE_TEST(remote_is_always_the_last_rung,
+          "the cloud fallback never sits above a local tier, whatever was dropped") {
+  for (const bool noGpuSlot : {false, true}) {
+    for (const bool forceCpu : {false, true}) {
+      const std::vector<std::string> order = ladderFrom(kShippedLadder, noGpuSlot, forceCpu);
+      CHECK_EQ(order.back(), std::string("remote"));
+    }
+  }
+}
+
+EDGE_TEST(a_ladder_naming_no_cpu_still_gets_one,
+          "narrowing a ladder that never named the cpu still leaves a usable floor") {
+  const std::vector<std::string> order = ladderFrom({"cuda", "npu"}, true, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(order[0], std::string("npu"));
+  CHECK_EQ(order[1], std::string("cpu"));
+}

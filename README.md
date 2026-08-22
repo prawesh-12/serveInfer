@@ -304,15 +304,24 @@ EDGE_CLIENT_RETRY_MAX_MS=8000
 # Tier names this build understands: cpu cuda rocm vulkan npu directml gpu ane
 # metal accelerate remote. A tier for another OS probes as wrong_platform and is
 # skipped, so a Windows ladder (npu,directml,cpu) is safe to leave in place here.
-EDGE_DEVICE_LADDER=cuda,cpu
+# remote is listed but inert until both of its own gates below are open.
+EDGE_DEVICE_LADDER=cuda,npu,ane,cpu,remote
 EDGE_DEVICE_QUARANTINE_MS=60000
 EDGE_DEVICE_PROBE_INTERVAL_MS=5000
 
-# The remote tier sends prompts off the device, so it needs an endpoint AND an
-# explicit opt-in. Both unset means the tier probes as runtime_missing and is
-# skipped. Endpoint set without the opt-in probes as policy_disabled.
-EDGE_REMOTE_ENDPOINT=
+# The remote tier sends prompts off the device, so it needs somewhere to send them
+# AND an explicit opt-in. A key or an endpoint answers the first; only
+# EDGE_REMOTE_FALLBACK_ALLOWED=1 answers the second, and a key alone is not consent.
+EDGE_SARVAM_API_KEY=
 EDGE_REMOTE_FALLBACK_ALLOWED=0
+EDGE_REMOTE_ENDPOINT=
+EDGE_NODE_BIN=node
+EDGE_REMOTE_TRANSPORT_SCRIPT=./backend/remote/sarvamTransport.js
+EDGE_REMOTE_TIMEOUT_MS=30000
+EDGE_SARVAM_MODEL=sarvam-105b-conversations
+EDGE_SARVAM_TEMPERATURE=0.2
+EDGE_SARVAM_TOP_P=1
+EDGE_SARVAM_MAX_TOKENS=2000
 
 # Exercises the fallback path without the hardware: removed | unsupported | runtime.
 # Empty means no injection, which costs one getenv per generate call.
