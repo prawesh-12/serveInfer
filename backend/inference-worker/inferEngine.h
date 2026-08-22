@@ -62,6 +62,7 @@ class InferEngine : public GpuResourceOwner {
 
   void recordFault(DeviceFault fault, const std::string& detail);
   DeviceFault injectedFault();
+  static std::string applyPromptTemplate(const std::string& prompt);
 
   InferConfig cfg_;
   bool gpuOk_ = true;

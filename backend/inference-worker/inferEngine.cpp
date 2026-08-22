@@ -33,6 +33,17 @@ DeviceFault faultByName(const std::string& name) {
 
 }  // namespace
 
+// The shipped model is instruct-tuned, so a bare prompt is completed as text rather than answered.
+std::string InferEngine::applyPromptTemplate(const std::string& prompt) {
+  const char* raw = std::getenv("EDGE_PROMPT_TEMPLATE");
+  const std::string form = raw == nullptr ? "<|user|>\n{prompt}<|end|>\n<|assistant|>\n" : raw;
+  const std::size_t slot = form.find("{prompt}");
+  if (form.empty() || slot == std::string::npos) {
+    return prompt;
+  }
+  return form.substr(0, slot) + prompt + form.substr(slot + 8);
+}
+
 // EDGE_SIMULATE_DEVICE_FAULT is "[<tier>:]<fault>", and fires at most once per worker: a
 // fault that repeated would break the tier it fell back to as well, and again after a respawn.
 DeviceFault InferEngine::injectedFault() {
@@ -244,7 +255,7 @@ std::string InferEngine::generate(const std::string& prompt) {
   }
 #if defined(EDGE_USE_LLAMA)
   llama_context* ctx = static_cast<llama_context*>(ctx_);
-  auto tokens = tokenize(prompt);
+  auto tokens = tokenize(applyPromptTemplate(prompt));
   if (tokens.empty()) {
     return "[error: prompt tokenize failed]";
   }
@@ -285,7 +296,7 @@ void InferEngine::generateStreaming(const std::string& prompt,
   }
 #if defined(EDGE_USE_LLAMA)
   llama_context* ctx = static_cast<llama_context*>(ctx_);
-  auto tokens = tokenize(prompt);
+  auto tokens = tokenize(applyPromptTemplate(prompt));
   if (tokens.empty()) {
     onToken("[error: prompt tokenize failed]");
     return;
