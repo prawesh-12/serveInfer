@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const envSourcePath = path.join(__dirname, '..', 'config', 'env.js');
+const envSourcePath = path.join(__dirname, '..', 'backend', 'config', 'env.js');
 const tempDirs = [];
 
 // Three things make config/env.js awkward to test. parseEnvLine is private. It
@@ -35,7 +35,8 @@ module.exports.parseEnvLine = parseEnvLine;
     require,
     fakeModule,
     envSourcePath,
-    path.join(dir, 'config'),
+    // env.js lives at backend/config/, and resolves the repo root two levels up.
+    path.join(dir, 'backend', 'config'),
     { env: processEnv }
   );
   return { env: fakeModule.exports, dir, processEnv };

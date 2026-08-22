@@ -11,8 +11,8 @@ The code splits along that seam:
 
 | File | Holds |
 |---|---|
-| [`deviceLadder.cpp`](../inference-worker/deviceLadder.cpp) | **policy**: which tier, when to quarantine, when a tier may come back |
-| [`deviceBackends.cpp`](../inference-worker/deviceBackends.cpp) | **mechanism**: how to probe each accelerator, and how to read each vendor's error codes |
+| [`deviceLadder.cpp`](../backend/inference-worker/deviceLadder.cpp) | **policy**: which tier, when to quarantine, when a tier may come back |
+| [`deviceBackends.cpp`](../backend/inference-worker/deviceBackends.cpp) | **mechanism**: how to probe each accelerator, and how to read each vendor's error codes |
 
 Every backend compiles on every platform. A tier belonging to another OS reports
 `wrong_platform` instead of being absent, so a ladder string copied from a Windows

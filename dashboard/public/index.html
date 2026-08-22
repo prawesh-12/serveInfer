@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Edge Runtime Status</title>
+        <link rel="stylesheet" href="/styles.css" />
+    </head>
+    <body>
+        <header class="bar">
+            <h1>System Status</h1>
+            <div class="bar-right">
+                <span id="lastUpdated" class="muted tabular">checking</span>
+                <button id="refreshBtn" type="button">Refresh</button>
+            </div>
+        </header>
+
+        <section id="apiStrip" class="strip"></section>
+
+        <main class="grid">
+            <section class="card">
+                <h2>Processes <span id="processSummary" class="tag"></span></h2>
+                <div id="processList" class="rows"></div>
+            </section>
+
+            <section class="card">
+                <h2>Workers <span id="workerSummary" class="tag"></span></h2>
+                <div id="workerList" class="rows"></div>
+
+                <h2 class="sub">Scheduler <span class="tag">singleton shell</span></h2>
+                <div id="schedulerGrid" class="stats"></div>
+            </section>
+
+            <section class="card">
+                <h2>API clients <span id="mfeRequestSummary" class="tag"></span></h2>
+                <div id="mfeRequestList" class="rows"></div>
+                <p class="note">
+                    Whoever is holding a slot right now, by the mfeId they sent.
+                    Any client of the shell API shows up here.
+                </p>
+            </section>
+        </main>
+
+        <details class="raw">
+            <summary>Raw status</summary>
+            <pre id="rawJson">{}</pre>
+        </details>
+
+        <script src="/dashboard-config.js"></script>
+        <script src="/app.js" defer></script>
+    </body>
+</html>

@@ -1,38 +1,55 @@
 # Build outputs
-.cache
 /build/
 **/build/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 compile_commands.json
+.cache
 
-# Node.js dependencies
+# Dependencies
 node_modules/
-api-server/node_modules/
-shell-app/node_modules/
 
 # Python virtualenv/cache
 venv/
+.venv/
 __pycache__/
 *.pyc
 
-# Runtime IPC/state
-/tmp/edge-*.sock
-/tmp/edge-runtime/
-/tmp/edge-crash.log
-/dev/shm/edge-*
-
-# Logs
+# Runtime state, if EDGE_STATE_DIR ever points at the working tree
 *.log
+*.pid
 
-# Local env files
+# Local env. .env.example is tracked and holds every key.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
-# Downloaded model artifacts (keep placeholder)
-models/*
-!models/.gitkeep
+# Model weights
+*.gguf
+backend/models/*
+!backend/models/.gitkeep
+
+# Compiled objects, if cmake is ever run in-source under llama-src
+*.o
+*.a
+*.d
+*.so
+*.so.*
+
+# Core dumps. Workers are killed on purpose when testing crash recovery.
+core
+core.*
+vgcore.*
 
 extras/
+
+# Merge leftovers
+*.orig
+*.rej
+
+# Editor and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

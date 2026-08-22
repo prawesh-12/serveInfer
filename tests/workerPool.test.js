@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 
-const { WorkerPool } = require('../api-server/ipc');
+const { WorkerPool } = require('../backend/api-server/ipc');
 const { sleep, waitFor } = require('./support');
 
 // An AF_UNIX path has to fit in 108 bytes, so these stay in /tmp with short
