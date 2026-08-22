@@ -8,6 +8,8 @@ find_package(Threads REQUIRED)
 add_executable(edge-inference-worker
   main.cpp
   worker.cpp
+  deviceLadder.cpp
+  deviceBackends.cpp
   inferEngine.cpp
 )
 
@@ -51,3 +53,6 @@ if(EDGE_ENABLE_LLAMA)
   endif()
 endif()
 
+
+# Assert-based unit tests. Nothing above depends on these targets.
+add_subdirectory(tests)

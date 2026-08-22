@@ -80,6 +80,16 @@ int main(int argc, char** argv) {
     config.forceCpu = std::string(forceCpu) == "1";
   }
 
+  if (const char* ladder = std::getenv("EDGE_DEVICE_LADDER")) {
+    config.deviceLadder = parseDeviceLadder(ladder);
+  }
+  if (const char* quarantine = std::getenv("EDGE_DEVICE_QUARANTINE_MS")) {
+    parseIntArg(quarantine, config.deviceQuarantineMs);
+  }
+  if (const char* probe = std::getenv("EDGE_DEVICE_PROBE_INTERVAL_MS")) {
+    parseIntArg(probe, config.deviceProbeIntervalMs);
+  }
+
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     const auto takeValue = [&](const std::string& flag, std::string& dest) -> bool {
