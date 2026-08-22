@@ -1,5 +1,4 @@
 #!/bin/bash
-# Stops all three tiers. Each tier only touches its own pidfiles.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

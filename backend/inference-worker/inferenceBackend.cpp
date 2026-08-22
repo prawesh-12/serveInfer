@@ -15,14 +15,16 @@ BackendExecution notCompiledIn(const std::string& detail) {
   return result;
 }
 
-BackendExecution runThroughEngine(InferEngine* engine, const std::string& prompt,
-                                  const TokenSink& onToken) {
+BackendExecution runThroughEngine(InferEngine* engine, const std::string& tier,
+                                  const std::string& prompt, const TokenSink& onToken) {
   BackendExecution result;
   if (engine == nullptr) {
     result.fault = DeviceFault::kUnavailable;
     result.detail = "inference engine is not initialized";
     return result;
   }
+
+  engine->setExecutingTier(tier);
 
   if (onToken) {
     engine->generateStreaming(prompt, [&](const std::string& token) {
@@ -80,7 +82,7 @@ BackendExecution QualcommHexagonBackend::execute(const std::string& prompt,
         "qualcomm hexagon backend is compiled in (GGML_USE_HEXAGON) but no inference engine is "
         "bound to the npu adapter");
   }
-  return runThroughEngine(engine_, prompt, onToken);
+  return runThroughEngine(engine_, name_, prompt, onToken);
 }
 
 bool QualcommHexagonBackend::healthCheck() {
@@ -212,7 +214,7 @@ ProbeResult LlamaInferenceBackend::available() {
 
 BackendExecution LlamaInferenceBackend::execute(const std::string& prompt,
                                                 const TokenSink& onToken) {
-  return runThroughEngine(engine_, prompt, onToken);
+  return runThroughEngine(engine_, name_, prompt, onToken);
 }
 
 bool LlamaInferenceBackend::healthCheck() {

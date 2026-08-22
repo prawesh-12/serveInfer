@@ -29,13 +29,11 @@ target_link_libraries(edge-inference-worker PRIVATE Threads::Threads rt)
 
 if(EDGE_ENABLE_LLAMA)
   # Vendored llama.cpp, pinned to upstream commit e85caa81ea2b65797396018c179b87ad61fa38ab
-  # (ggml 0.21.0). Synchronized from the reference tree; see docs/build-matrix.md.
-  # This is the ONE authoritative llama.cpp source tree for this project.
+  # (ggml 0.21.0). The one authoritative copy; see docs/build-matrix.md.
   set(EDGE_LLAMA_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama-src")
   if(EXISTS "${EDGE_LLAMA_SRC_DIR}/CMakeLists.txt")
-    # llama-src has no .git of its own, so upstream's build-info.cmake would walk up
-    # and stamp the binary with THIS repo's commit. Pin the real vendored upstream
-    # identity instead, so `llama_print_system_info` does not lie about its version.
+    # llama-src has no .git of its own, so upstream's build-info.cmake would stamp
+    # the binary with THIS repo's commit. Pin the vendored upstream identity instead.
     set(LLAMA_BUILD_COMMIT "e85caa81")
     set(LLAMA_BUILD_NUMBER 10582)
 
@@ -72,5 +70,4 @@ if(EDGE_ENABLE_LLAMA)
 endif()
 
 
-# Assert-based unit tests. Nothing above depends on these targets.
 add_subdirectory(tests)

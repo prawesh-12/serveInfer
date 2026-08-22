@@ -1,6 +1,4 @@
 #!/bin/bash
-# The sample user-facing apps. They are HTTP clients of the shell API and share
-# nothing with the backend but its URL, so they start and stop on their own.
 set -euo pipefail
 
 TIER=clients

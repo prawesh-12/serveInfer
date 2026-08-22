@@ -1,8 +1,7 @@
 'use strict';
 
-// One JSON request on stdin, one JSON response line on stdout, then exit. The C++
-// worker cannot call a Node SDK in-process, so the remote tier reaches Sarvam the
-// same way the supervisor reaches hardware discovery: through a short-lived child.
+// One JSON request on stdin, one JSON response line on stdout, then exit: the C++
+// worker cannot call a Node SDK in-process, so it reaches Sarvam through a child.
 
 const path = require('node:path');
 

@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 
-# The supervisor deliberately does not link llama. Hardware discovery runs in a
-# short-lived worker child, because enumerating devices through ggml costs the
-# calling process a CUDA primary context it can never give back.
+# The supervisor deliberately does not link llama: enumerating devices through
+# ggml costs the calling process a CUDA primary context it can never give back.
 add_executable(edge-supervisor
   main.cpp
   supervisor.cpp

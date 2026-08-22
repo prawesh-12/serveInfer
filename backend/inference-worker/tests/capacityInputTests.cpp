@@ -6,8 +6,6 @@
 #include <string>
 #include <vector>
 
-// Capacity planning fed the inputs it does not get to choose: reserves, budgets, probe output.
-
 namespace {
 
 CapacityLimits budgets(long long gpuReserveMb, long long workerGpuMb, long long ramReserveMb,

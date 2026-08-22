@@ -260,7 +260,6 @@ test('a running job that honours its abort signal is killed by the execution tim
 });
 
 test('the execution timeout reclaims the slot even when the job ignores its abort signal', async () => {
-  // The timeout releases the slot itself; a job that never settles is what it exists for.
   const scheduler = makeScheduler({ execTimeoutMs: 20 });
   const events = [];
 

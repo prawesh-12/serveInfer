@@ -26,8 +26,6 @@ function esc(value) {
     return String(value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 
-// A label above a number. No border and no fill, so a row of these reads as one
-// strip rather than four cards.
 function stat(label, value, cls = "") {
     return `<div><div class="k">${esc(label)}</div><div class="v ${cls}">${esc(value)}</div></div>`;
 }
@@ -36,14 +34,12 @@ function statWithDot(label, value, dot) {
     return `<div><div class="k">${esc(label)}</div><div class="v"><span class="dot ${dot}"></span>${esc(value)}</div></div>`;
 }
 
-// Dot plus name plus value. The dot repeats what the value already says in
-// words, so colour is never the only signal.
+// The dot repeats what the value already says in words, so colour is never the
+// only signal.
 function row(name, value, dot = "", valueCls = "") {
     return `<div><span class="dot ${dot}"></span><span class="name">${esc(name)}</span><span class="val ${valueCls}">${esc(value)}</span></div>`;
 }
 
-// Whatever registered itself, grouped by tier. Nothing is hardcoded, so a new
-// client that writes a pidfile shows up here without a change to this file.
 const TIER_LABEL = { backend: "Backend", clients: "Clients", dashboard: "Dashboard", other: "Other" };
 
 function registryRows(registry) {

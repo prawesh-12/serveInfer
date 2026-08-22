@@ -1430,14 +1430,15 @@ degraded, which is the correct answer.
 Exercise the path without the hardware:
 
 ```bash
-EDGE_SIMULATE_DEVICE_FAULT=removed      # ERROR_DEVICE_REMOVED, session-fatal
-EDGE_SIMULATE_DEVICE_FAULT=unsupported  # kCMErrorUnsupportedOperation, quarantine only
-EDGE_SIMULATE_DEVICE_FAULT=runtime      # generic backend fault, quarantine only
+EDGE_SIMULATE_DEVICE_FAULT=cuda:removed  # ERROR_DEVICE_REMOVED on cuda, session-fatal
+EDGE_SIMULATE_DEVICE_FAULT=unsupported   # kCMErrorUnsupportedOperation, quarantine only
+EDGE_SIMULATE_DEVICE_FAULT=runtime       # generic backend fault, quarantine only
 ```
 
-Read once per `generate` call at `backend/inference-worker/inferEngine.cpp:20-35`. Unset, it costs one
-`getenv` and nothing else. It's deliberately absent from `.env.example`, so you set it in the
-environment when you want it.
+The value is `[<tier>:]<fault>`. Without a tier it faults whichever tier runs first. Either way
+it fires at most once per worker (`backend/inference-worker/inferEngine.cpp:36-63`), so the tier
+the ladder falls to answers normally and a respawned cpu worker that inherits the same
+environment is never faulted by a `cuda:` target.
 
 One rough edge. `DeviceLadder` stores `probeInterval_` from `EDGE_DEVICE_PROBE_INTERVAL_MS`
 (`backend/inference-worker/deviceLadder.cpp:69`) and never reads it. Probing happens on demand inside
@@ -1862,7 +1863,7 @@ them.
 
 | Variable | Values | Meaning |
 |---|---|---|
-| `EDGE_SIMULATE_DEVICE_FAULT` | `removed`, `unsupported`, `runtime` | injects a device fault on every generate call, for exercising the ladder |
+| `EDGE_SIMULATE_DEVICE_FAULT` | `[<tier>:]removed`, `unsupported`, `runtime` | injects one device fault on the named tier, for exercising the ladder |
 
 ---
 
@@ -2110,7 +2111,7 @@ tail -3 ./logs/edge-crash.log
 ls -l /dev/shm/edge-model-weights
 
 # 7. device fallback with no hardware fault available
-EDGE_SIMULATE_DEVICE_FAULT=removed make restart
+EDGE_SIMULATE_DEVICE_FAULT=cuda:removed make restart
 curl -i -X POST http://127.0.0.1:11434/infer \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"probe","requestId":"probe-1"}' | grep -i 'X-Latency-Mode\|X-Degraded-Reason'

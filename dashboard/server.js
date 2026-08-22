@@ -53,9 +53,8 @@ function getJson(url, timeoutMs = 1200) {
   });
 }
 
-// $EDGE_STATE_DIR is the process list. Every process writes <name>.pid on start
-// and removes it on exit, so a new client joins by writing one file and nothing
-// here changes. The name prefix carries the tier.
+// $EDGE_STATE_DIR is the process list: every process writes <name>.pid on start
+// and removes it on exit, and the name prefix carries the tier.
 function tierOf(name) {
   if (name.startsWith('backend-')) return { tier: 'backend', label: name.slice('backend-'.length) };
   if (name.startsWith('client-')) return { tier: 'clients', label: name.slice('client-'.length) };

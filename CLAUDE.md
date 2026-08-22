@@ -66,7 +66,7 @@ cmake -S backend -B build -DEDGE_ENABLE_LLAMA=OFF && cmake --build build -j"$(np
 
 This path works: `llama.h` is guarded, so the tree builds with no vendored backend.
 Without the `EDGE_USE_LLAMA` define, `InferEngine::generate()` returns the literal string
-`"Inference response: <prompt>"` (`backend/inference-worker/inferEngine.cpp:228-233`). No model file needed
+`"Inference response: <prompt>"` (`backend/inference-worker/inferEngine.cpp:270-275`). No model file needed
 for the C++ build, though `scripts/backend.sh` still checks one exists. Real backend on CPU only:
 `-DEDGE_ENABLE_CUDA=OFF`.
 
@@ -88,7 +88,7 @@ default, so `node clients/document-qa/server.js` works from a clone with no repo
 
 ### Tests, lint, CI
 
-246 tests, no new dependencies: 63 JavaScript and 183 C++. `node:test` for the JavaScript
+291 tests, no new dependencies: 85 JavaScript and 206 C++. `node:test` for the JavaScript
 in `tests/`, a small assert harness for the C++ in `backend/inference-worker/tests/`. Nothing needs the model file, a GPU
 or a running stack.
 
@@ -116,11 +116,12 @@ Browser: Doc Q&A `:5002` (press "Burst LOW x5" to see queue positions), Meeting 
 (streaming), status dashboard `:3001`.
 
 The C++ side is four binaries: `edge-device-tests` (28, ladder and vendor error mapping),
-`edge-worker-json-tests` (10, frame parsing), `edge-hardware-tests` (123, capacity
+`edge-worker-json-tests` (15, frame parsing), `edge-hardware-tests` (131, capacity
 planning, backend assignment, the CUDA environment guarantee, the NPU/ANE state machines
-driven through injectable fakes, worker reassignment, and the streaming contract across a
-fallback) and `edge-remote-recovery-tests` (22, the remote tier's two policy gates and the
-climb back up the ladder, all through an injected fake transport that opens no socket).
+driven through injectable fakes, worker reassignment, fault injection, and the streaming
+contract across a fallback) and `edge-remote-recovery-tests` (32, the remote tier's two
+policy gates and the climb back up the ladder, all through an injected fake transport that
+opens no socket).
 `make test-cpp` builds and runs all four.
 
 Already covered by the suites: scheduler priority and aging
@@ -299,8 +300,9 @@ compile everywhere and **refuse to execute** rather than faking success.
 
 `degraded` is now measured against the best tier available at startup, not against `activeDevice_ ==
 "cpu"`. A CPU-only machine is not degraded; a machine that fell off cuda onto cpu is. Reporting it
-any other way makes the flag meaningless. Set `EDGE_SIMULATE_DEVICE_FAULT=removed|unsupported|runtime`
-to exercise the path without the hardware.
+any other way makes the flag meaningless. Set `EDGE_SIMULATE_DEVICE_FAULT=[<tier>:]removed|unsupported|runtime`
+to exercise the path without the hardware. It fires once per worker, and only on the named
+tier, so the tier the ladder falls to keeps answering and a respawned worker is untouched.
 
 ### Replayed request ids are idempotent
 

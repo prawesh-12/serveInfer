@@ -182,7 +182,6 @@ EDGE_TEST(core_media_never_reports_a_removal,
   CHECK_EQ(faultName(faultFromCoreMediaStatus(-11999L)), std::string("runtime_error"));
   CHECK_EQ(faultName(faultFromCoreMediaStatus(-13000L)), std::string("runtime_error"));
 
-  // Apple tells you what it cannot run; it never tells you the accelerator has gone.
   for (long status = -14000L; status <= 200L; status += 7L) {
     CHECK(faultFromCoreMediaStatus(status) != DeviceFault::kRemoved);
   }

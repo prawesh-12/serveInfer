@@ -108,7 +108,6 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
           fs.unlinkSync(socketPath);
         }
       } catch {
-        // no-op
       }
     });
   };
@@ -120,10 +119,6 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
 
 const args = parseArgs(process.argv);
 const port = Number(args.port || numberEnv('EDGE_API_PORT'));
-// EDGE_WORKER_COUNT is the ceiling the operator asked for. The supervisor
-// publishes the count it could actually place, so prefer that and size the pool
-// to the workers that really exist. Optional env: read it directly rather than
-// through requiredEnv, because the api-server must still boot standalone.
 loadEnv();
 const workerCountDecision = resolveWorkerCount({
   configuredCount: numberEnv('EDGE_WORKER_COUNT'),

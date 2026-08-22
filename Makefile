@@ -60,7 +60,6 @@ restart:
 	@bash scripts/clients.sh start
 	@bash scripts/dashboard.sh start
 
-# Neither suite needs the model file, a GPU or a running stack.
 test: test-js test-cpp
 
 test-js:

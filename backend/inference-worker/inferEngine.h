@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "deviceLadder.h"
@@ -44,6 +45,11 @@ class InferEngine : public GpuResourceOwner {
     lastFaultDetail_.clear();
   }
 
+  // The tier this engine is executing for. EDGE_SIMULATE_DEVICE_FAULT matches against it.
+  void setExecutingTier(std::string tier) {
+    executingTier_ = std::move(tier);
+  }
+
   std::string generate(const std::string& prompt);
   void generateStreaming(const std::string& prompt,
                          const std::function<void(const std::string&)>& onToken);
@@ -55,13 +61,15 @@ class InferEngine : public GpuResourceOwner {
   void runDecodeLoop(const std::function<void(const std::string&)>& onToken);
 
   void recordFault(DeviceFault fault, const std::string& detail);
-  DeviceFault injectedFault() const;
+  DeviceFault injectedFault();
 
   InferConfig cfg_;
   bool gpuOk_ = true;
   bool deviceInitialized_ = false;
   DeviceFault lastFault_ = DeviceFault::kNone;
   std::string lastFaultDetail_;
+  std::string executingTier_;
+  bool faultInjected_ = false;
   void* model_ = nullptr;  // llama_model*
   void* ctx_ = nullptr;    // llama_context*
 };

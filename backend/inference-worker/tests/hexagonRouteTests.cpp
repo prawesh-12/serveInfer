@@ -1,5 +1,3 @@
-// The Hexagon route: the branch exists and is gated on GGML_USE_HEXAGON, which is closed here.
-
 #include "testHarness.h"
 
 #include "../inferEngine.h"

@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-// What the runtime promises a client when a tier faults mid-request. Every tier below is a fake.
-
 namespace {
 
 // The multi-token case the single-token fake in backendRouterTests cannot express.

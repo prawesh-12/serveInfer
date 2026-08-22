@@ -1,5 +1,3 @@
-// Drives applyWorkerReassignment, the same function the supervisor calls; only the fork is faked.
-
 #include "testHarness.h"
 
 #include "../../supervisor/workerReassignment.h"
@@ -81,7 +79,6 @@ EDGE_TEST(reassignment_fails_when_the_replacement_worker_does_not_start,
   const ReassignmentOutcome outcome =
       applyWorkerReassignment(assignments, 0, kReassignExit, kRunning, recorder.hooks(), log);
 
-  // The regression this part exists for: this used to be reported as success.
   CHECK(outcome != ReassignmentOutcome::kRestarted);
   CHECK_EQ(reassignmentOutcomeName(outcome), std::string("start_failed"));
   CHECK_EQ(recorder.startCalls, 1);
@@ -169,7 +166,7 @@ EDGE_TEST(a_shutting_down_supervisor_does_not_restart_a_reassigned_worker,
 EDGE_TEST(a_missing_start_hook_is_a_failed_start_not_a_silent_success,
           "nothing to start with is still a failure, so the outcome can never be restarted") {
   std::vector<WorkerAssignment> assignments = oneCudaWorker();
-  ReassignmentHooks hooks;  // every hook empty
+  ReassignmentHooks hooks;
   std::ostringstream log;
 
   const ReassignmentOutcome outcome =

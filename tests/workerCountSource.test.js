@@ -14,7 +14,7 @@ const {
 const { WorkerPool } = require('../backend/api-server/ipc');
 
 // Fixtures are real files, because the whole point is that this reads the one
-// the supervisor wrote. They go in a temp dir that is removed afterwards.
+// the supervisor wrote.
 let tmpDir = null;
 let counter = 0;
 
@@ -25,8 +25,7 @@ function tempDir() {
   return tmpDir;
 }
 
-// Writes a model-config fixture and returns its path. `body` is written
-// verbatim when it is a string, so a test can supply malformed JSON.
+// `body` is written verbatim when it is a string, so a test can supply malformed JSON.
 function writeModelConfig(body) {
   counter += 1;
   const filePath = path.join(tempDir(), `model-config-${counter}.json`);
@@ -88,7 +87,6 @@ test('the resolved count is what WorkerPool pre-creates entries for', () => {
     connectTimeoutMs: 50,
   });
 
-  // No pool entry exists for a worker the supervisor never started.
   assert.equal(pool.workers.size, 2);
   assert.deepEqual(
     pool.getHealth().workers.map((w) => w.id),
@@ -263,7 +261,6 @@ test('the scheduler slot limit is a different number and is untouched by this', 
   const decision = resolveWorkerCount({ configuredCount: 4, modelConfigPath });
 
   assert.equal(decision.workerCount, 2);
-  // Resolving the pool size must not reach into the scheduler's config.
   assert.equal(process.env.EDGE_MAX_SLOTS, before);
 
   const source = fs.readFileSync(

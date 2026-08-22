@@ -4,9 +4,11 @@
 #include "llama.h"
 #endif
 
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <string>
 #include <vector>
 
 void InferEngine::recordFault(DeviceFault fault, const std::string& detail) {
@@ -14,21 +16,50 @@ void InferEngine::recordFault(DeviceFault fault, const std::string& detail) {
   lastFaultDetail_ = detail;
 }
 
-DeviceFault InferEngine::injectedFault() const {
+namespace {
+
+DeviceFault faultByName(const std::string& name) {
+  if (name == "removed") {
+    return DeviceFault::kRemoved;
+  }
+  if (name == "unsupported") {
+    return DeviceFault::kUnsupportedOp;
+  }
+  if (name == "runtime") {
+    return DeviceFault::kRuntimeError;
+  }
+  return DeviceFault::kNone;
+}
+
+}  // namespace
+
+// EDGE_SIMULATE_DEVICE_FAULT is "[<tier>:]<fault>", and fires at most once per worker: a
+// fault that repeated would break the tier it fell back to as well, and again after a respawn.
+DeviceFault InferEngine::injectedFault() {
+  if (faultInjected_) {
+    return DeviceFault::kNone;
+  }
   const char* raw = std::getenv("EDGE_SIMULATE_DEVICE_FAULT");
   if (raw == nullptr || raw[0] == '\0') {
     return DeviceFault::kNone;
   }
-  if (std::strcmp(raw, "removed") == 0) {
-    return DeviceFault::kRemoved;
+
+  std::string spec(raw);
+  const std::size_t colon = spec.find(':');
+  if (colon != std::string::npos) {
+    // An empty target is a typo, not a wildcard: ":removed" must not fire on an unnamed tier.
+    const std::string target = spec.substr(0, colon);
+    if (target.empty() || target != executingTier_) {
+      return DeviceFault::kNone;
+    }
+    spec.erase(0, colon + 1);
   }
-  if (std::strcmp(raw, "unsupported") == 0) {
-    return DeviceFault::kUnsupportedOp;
+
+  const DeviceFault fault = faultByName(spec);
+  if (fault != DeviceFault::kNone) {
+    faultInjected_ = true;
   }
-  if (std::strcmp(raw, "runtime") == 0) {
-    return DeviceFault::kRuntimeError;
-  }
-  return DeviceFault::kNone;
+  return fault;
 }
 
 void InferEngine::freeModelAndContext() {

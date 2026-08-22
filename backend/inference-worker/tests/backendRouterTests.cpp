@@ -10,8 +10,6 @@
 #include <thread>
 #include <vector>
 
-// The state machine driven through an injectable backend; no NPU or ANE is involved.
-
 namespace {
 
 class FakeBackend : public InferenceBackend {
@@ -262,7 +260,6 @@ EDGE_TEST(npu_11_runs_inference_again_after_recovery,
 EDGE_TEST(npu_removal_is_final_within_one_session,
           "a removed npu stays out for the whole session no matter how many requests arrive "
           "(fake, no hardware)") {
-  // Inside one session a removal is final; that is why beginSession is an explicit call.
   Rig rig = makeRig({"npu", "cpu"}, 0);
   CHECK(rig.router->select());
   rig["npu"].nextFault = DeviceFault::kRemoved;
@@ -293,7 +290,6 @@ EDGE_TEST(ane_1_success_runs_on_the_neural_engine,
 
 EDGE_TEST(ane_2_unsupported_operation_is_not_read_as_a_removal,
           "kCMErrorUnsupportedOperation maps to unsupported_operation, never device_removed") {
-  // Nothing Apple returns means the hardware is gone -- the asymmetry with NPU removal.
   CHECK_EQ(std::string(deviceFaultName(faultFromCoreMediaStatus(kCMErrorUnsupportedOperation))),
            std::string("unsupported_operation"));
   CHECK_EQ(kCMErrorUnsupportedOperation, -12782L);

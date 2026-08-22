@@ -1,6 +1,5 @@
-// A retry reuses the same requestId on purpose. The api-server caches
-// successful results against it, so a retry that races a late success replays
-// the answer instead of running the inference twice.
+// A retry reuses the same requestId on purpose: the api-server replays the
+// cached success instead of running the inference twice.
 
 const RETRY_DEFAULTS = { attempts: 3, baseMs: 500, maxMs: 8000 };
 

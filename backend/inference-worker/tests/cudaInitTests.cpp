@@ -1,5 +1,3 @@
-// CUDA initialization as one path: plan -> assign -> env -> the ladder selects cuda, undegraded.
-
 #include "testHarness.h"
 
 #include "../../hardware/capacityPlan.h"

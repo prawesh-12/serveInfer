@@ -1,11 +1,6 @@
 #pragma once
 
-// A tiny dependency-free harness. Each case registers itself at startup.
-//
-//   EDGE_TEST(some_id, "plain language description of the behaviour") {
-//     CHECK(condition);
-//     CHECK_EQ(actual, expected);
-//   }
+// A tiny dependency-free harness. Each EDGE_TEST case registers itself at startup.
 
 #include <functional>
 #include <iostream>

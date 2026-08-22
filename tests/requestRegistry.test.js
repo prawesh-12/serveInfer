@@ -231,7 +231,6 @@ test('lookup reports new, then inflight, then completed with the result attached
 });
 
 test('overlapping writes still publish valid JSON, not a mix of two payloads', async () => {
-  // The regression: every write used to go to the same .tmp path, so two at once could interleave.
   const inflightPath = newInflightPath();
   const registry = new RequestRegistry({ inflightPath, idempotencyTtlMs: 60_000 });
   const jobs = [];
@@ -245,7 +244,6 @@ test('overlapping writes still publish valid JSON, not a mix of two payloads', a
     );
   }
   await Promise.all(jobs);
-  // Writes are async, so the file may not exist yet on the first look.
   await waitFor(() => {
     try {
       return JSON.parse(fs.readFileSync(inflightPath, 'utf8')).inflight.length === 0;

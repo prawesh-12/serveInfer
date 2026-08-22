@@ -149,8 +149,7 @@ bool envIsSet(const char* name) {
   return value != nullptr && value[0] != '\0';
 }
 
-// Two independent facts: somewhere to send it, and permission to send it. A credential
-// sitting in the environment is not consent, so the opt-in stays its own variable.
+// A credential sitting in the environment is not consent, so the opt-in stays its own variable.
 ProbeResult probeRemote() {
   if (!envIsSet("EDGE_SARVAM_API_KEY") && !envIsSet("EDGE_REMOTE_ENDPOINT")) {
     return ProbeResult::kRuntimeMissing;

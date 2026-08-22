@@ -19,8 +19,6 @@
 #include <thread>
 #include <vector>
 
-// The remote tier over an injected fake transport, and recovery driven through route() only.
-
 namespace {
 
 class EnvGuard {
@@ -120,7 +118,6 @@ class FakeChildScript {
   std::string recorded_;
 };
 
-// The injected fake transport; it never leaves the process.
 struct FakeTransport {
   int calls = 0;
   std::string lastEndpoint;
@@ -468,8 +465,6 @@ EDGE_TEST(the_remote_adapter_releases_its_session_on_every_path_out,
   CHECK(!requiresProcessRestartForCpuOnly(remote, "remote", "cpu"));
 }
 
-// Everything below drives route() only: no case calls beginSession or puts a tier back by hand.
-
 EDGE_TEST(a_quarantined_tier_comes_back_through_the_production_route_path,
           "a worker that fell to the cpu climbs back to cuda on a later request, once the "
           "quarantine has closed and the health check passes (fake, no hardware)") {
@@ -548,7 +543,6 @@ EDGE_TEST(a_removed_tier_never_returns_within_the_worker_process,
   CHECK_EQ(rig["npu"].executeCalls, executesAtRemoval);
   CHECK_EQ(rig.router->ladder().tierState(0), std::string("NPU_UNHEALTHY"));
 
-  // Only the session boundary clears it, and only a new worker process is one.
   rig.router->beginSession();
   CHECK_EQ(rig.router->route("new session", nullptr).device, std::string("npu"));
 }
@@ -716,7 +710,6 @@ EDGE_TEST(a_recovered_remote_tier_is_reached_through_the_same_request_path,
 EDGE_TEST(a_tier_change_can_be_told_apart_from_a_fallback_by_ladder_position,
           "indexOf is what lets Worker::onTierChanged distinguish a recovery from a "
           "fallback, so an upward move is never charged the re-exec a device-class drop is") {
-  // The bug this guards: remote->cpu recovery looks like a cuda->cpu fallback on tier names alone.
   DeviceLadder ladder({"cuda", "cpu", "remote"}, 60000, 0);
   CHECK_EQ(ladder.indexOf("cuda"), std::size_t{0});
   CHECK_EQ(ladder.indexOf("cpu"), std::size_t{1});
@@ -726,9 +719,6 @@ EDGE_TEST(a_tier_change_can_be_told_apart_from_a_fallback_by_ladder_position,
   CHECK(ladder.indexOf("cpu") > ladder.indexOf("cuda"));
   CHECK(ladder.indexOf("cpu") < ladder.indexOf("remote"));
 }
-
-// Everything below covers the real Sarvam transport. It runs a fake child script in
-// place of node, so no case here loads the SDK, needs a key or reaches a network.
 
 namespace {
 

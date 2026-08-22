@@ -323,8 +323,8 @@ EDGE_SARVAM_TEMPERATURE=0.2
 EDGE_SARVAM_TOP_P=1
 EDGE_SARVAM_MAX_TOKENS=2000
 
-# Exercises the fallback path without the hardware: removed | unsupported | runtime.
-# Empty means no injection, which costs one getenv per generate call.
+# Exercises the fallback path without the hardware: [<tier>:]removed | unsupported | runtime.
+# Injected once per worker, and only on the named tier. Empty means no injection.
 EDGE_SIMULATE_DEVICE_FAULT=
 ```
 

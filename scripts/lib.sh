@@ -1,12 +1,4 @@
 # Shared helpers for the three tier scripts. Source this, do not run it.
-#
-# Every process registers itself as $EDGE_STATE_DIR/<tier>-<name>.pid. That
-# directory is the process list the dashboard reads, and the glob each tier's
-# stop uses so it never touches another tier's processes.
-#
-# Its log goes to $EDGE_LOG_DIR/<tier>-<name>.log, which is a separate directory
-# on purpose: pidfiles are runtime state that should not survive a reboot, logs
-# are the opposite.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

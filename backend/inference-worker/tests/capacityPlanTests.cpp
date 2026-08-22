@@ -342,7 +342,6 @@ EDGE_TEST(ram_scarcity_reduces_the_number_of_workers_actually_started,
 
   CHECK_EQ(plan.gpuWorkerCapacity, 1);
   CHECK_EQ(plan.cpuWorkerCapacity, 1);
-  // The regression this guards: the plan used to be logged and then ignored.
   CHECK_EQ(placeableWorkerCount(plan, 4), 2);
 }
 

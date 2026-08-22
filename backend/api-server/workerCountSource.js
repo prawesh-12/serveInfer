@@ -2,20 +2,9 @@
 
 const fs = require('node:fs');
 
-// EDGE_WORKER_COUNT is a ceiling, not a promise. The supervisor decides how
-// much of it the machine can actually pay for (placeableWorkerCount) and starts
-// only that many, then publishes the answer as `workerCount` in
-// $EDGE_MODEL_CONFIG_PATH — see Supervisor::writeModelConfig, which runs before
-// startApiServer, so the file is already on disk by the time we read it here.
-//
-// Reading it matters because WorkerPool pre-creates one pool entry per count.
-// Entries for workers that were never started are gated out by
-// _refreshWorkerReadiness (their socket never appears), but the scheduler
-// upstream still admits work against the larger number and the request comes
-// back 503 no_ready_workers instead of queueing.
-//
-// Every failure here is a fallback, never a throw: the api-server has to boot
-// standalone, and a missing model config is the normal case then.
+// EDGE_WORKER_COUNT is a ceiling; the supervisor publishes the count it could
+// actually place as `workerCount` in $EDGE_MODEL_CONFIG_PATH, and WorkerPool
+// pre-creates one pool entry per count, so the larger number over-provisions it.
 
 // A count larger than this is not a constrained-host answer, it is a corrupt
 // file. Fall back rather than pre-create thousands of pool entries.
@@ -47,16 +36,8 @@ function readModelConfig(modelConfigPath) {
   return { ok: true, config: parsed };
 }
 
-/**
- * Decide how many pool entries the WorkerPool should get.
- *
- * @param {object} options
- * @param {number} options.configuredCount  EDGE_WORKER_COUNT, the ceiling.
- * @param {string} [options.modelConfigPath] $EDGE_MODEL_CONFIG_PATH.
- * @returns {{workerCount:number, source:'model-config'|'env', configuredCount:number,
- *           effectiveCount:number|null, reason:string|null, clamped:boolean,
- *           modelConfigPath:string|null}}
- */
+// Every failure here is a fallback, never a throw: the api-server has to boot
+// standalone, and a missing model config is the normal case then.
 function resolveWorkerCount({ configuredCount, modelConfigPath } = {}) {
   const ceiling = Number(configuredCount);
   const base = {
@@ -66,8 +47,7 @@ function resolveWorkerCount({ configuredCount, modelConfigPath } = {}) {
     modelConfigPath: modelConfigPath || null,
   };
 
-  // Without a trustworthy ceiling there is nothing to clamp against and
-  // nothing to fall back to; hand the value straight to WorkerPool, whose
+  // Without a trustworthy ceiling there is nothing to clamp against; WorkerPool's
   // constructor is the one place that gets to reject it.
   if (!Number.isInteger(ceiling) || ceiling <= 0) {
     return {
@@ -118,10 +98,8 @@ function resolveWorkerCount({ configuredCount, modelConfigPath } = {}) {
     };
   }
 
-  // The effective count can never legitimately exceed the ceiling it was
-  // derived from. If it does, the two sides disagree about EDGE_WORKER_COUNT;
-  // trust the ceiling, because over-provisioning the pool is the failure mode
-  // this whole module exists to remove.
+  // An effective count above the ceiling it was derived from means the two sides
+  // disagree about EDGE_WORKER_COUNT; trust the ceiling and never over-provision.
   if (effective > ceiling) {
     return {
       ...base,
@@ -142,8 +120,6 @@ function resolveWorkerCount({ configuredCount, modelConfigPath } = {}) {
   };
 }
 
-// One line at startup, so an operator can see why the pool is smaller than
-// EDGE_WORKER_COUNT without reading the supervisor's stderr.
 function logWorkerCountDecision(logger, decision) {
   if (!logger) {
     return;

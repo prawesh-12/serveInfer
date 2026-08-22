@@ -1,6 +1,4 @@
 #!/bin/bash
-# The inference runtime: supervisor (which owns model-cache, api-server and the
-# worker pool) plus the shell API. Nothing here serves a browser.
 set -euo pipefail
 
 TIER=backend

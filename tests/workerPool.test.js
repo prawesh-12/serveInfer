@@ -66,7 +66,6 @@ test('probing a worker fails for a stale socket file that nothing is listening o
   const pool = makePool();
   const socketPath = pool.workers.get(0).socketPath;
 
-  // A killed process leaves its socket inode behind, which used to fool the bare-timer recovery.
   const child = spawn(
     process.execPath,
     [
@@ -172,7 +171,6 @@ test('a healthy worker whose socket exists is handed out by _acquireWorker', asy
 });
 
 test('a supervisor worker_restarted message re-arms the probe instead of trusting the claim', async () => {
-  // Trusting the crash message alone would hand out a worker whose socket is not there yet.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   pool._markWorkerCrashed(0, null);
   await waitFor(() => pool.workers.get(0).recoveryAttempt >= 2);
@@ -187,7 +185,6 @@ test('a supervisor worker_restarted message re-arms the probe instead of trustin
 });
 
 test('a worker whose socket file is stale is quarantined after its first failed request', async () => {
-  // A leftover socket file passes the readiness check, so the first failed request is what evicts.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   const socketPath = pool.workers.get(0).socketPath;
   fs.writeFileSync(socketPath, '');

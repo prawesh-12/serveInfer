@@ -188,9 +188,8 @@ struct ChildResult {
   std::string error;
 };
 
-// Same shape as Supervisor::runHardwareProbeChild: fork, exec, poll to a deadline,
-// SIGKILL what overruns it. Writing is polled too, so a child that never reads
-// its stdin cannot wedge the worker on a large prompt.
+// Same shape as Supervisor::runHardwareProbeChild. Writing is polled too, so a child
+// that never reads its stdin cannot wedge the worker on a large prompt.
 ChildResult runTransportChild(const std::string& binary, const std::string& script,
                               const std::string& input, int timeoutMs) {
   ChildResult result;
@@ -356,8 +355,8 @@ bool parseRemoteResponseJson(const std::string& output, RemoteResponse& out) {
   return true;
 }
 
-// Real, and off by default: without a credential this returns nothing at all, so the
-// tier refuses by name instead of failing mid-request.
+// Without a credential this returns nothing at all, so the tier refuses by name
+// instead of failing mid-request.
 RemoteTransport makeRemoteTransport() {
   if (envOr("EDGE_SARVAM_API_KEY", "").empty()) {
     return {};

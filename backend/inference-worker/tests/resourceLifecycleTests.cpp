@@ -5,8 +5,6 @@
 
 #include <string>
 
-// The cleanup path driven through an injectable owner, deterministically and with no GPU.
-
 namespace {
 
 // Can be told to behave like a backend whose device state outlives the release: the CUDA case.
@@ -109,7 +107,7 @@ EDGE_TEST(a_fallback_that_stays_within_the_device_class_does_not_force_a_respawn
 
 EDGE_TEST(a_worker_that_never_touched_a_device_does_not_respawn_itself,
           "a cpu worker whose tier changes has nothing to give back, so it keeps running") {
-  FakeResourceOwner owner;  // never initialized on a device
+  FakeResourceOwner owner;
   CHECK(!owner.deviceResourcesResident());
   CHECK(!requiresProcessRestartForCpuOnly(owner, "cpu", "cpu"));
   CHECK(!requiresProcessRestartForCpuOnly(owner, "vulkan", "cpu"));

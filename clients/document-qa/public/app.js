@@ -90,9 +90,8 @@ function closeCurrentSource() {
     }
 }
 
-// One attempt is one EventSource, opened and closed. It resolves when the
-// `done` event arrives. It rejects with the shell's error payload attached,
-// which is what withRetry reads to decide whether to try again.
+// Rejects with the shell's error payload attached, which is what withRetry
+// reads to decide whether to try again.
 function runStreamAttempt({ requestId, prompt, priority, responseEl }) {
     return new Promise((resolve, reject) => {
         const params = new URLSearchParams({

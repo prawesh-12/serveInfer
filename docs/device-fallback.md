@@ -506,12 +506,16 @@ and is skipped, so declaring `npu,cuda,cpu` on this Linux box selects `cuda` and
 A real device removal cannot be produced here, so the fault is injectable:
 
 ```bash
-EDGE_SIMULATE_DEVICE_FAULT=removed      # ERROR_DEVICE_REMOVED, session-fatal
-EDGE_SIMULATE_DEVICE_FAULT=unsupported  # kCMErrorUnsupportedOperation, quarantine
-EDGE_SIMULATE_DEVICE_FAULT=runtime      # generic backend fault, quarantine
+EDGE_SIMULATE_DEVICE_FAULT=cuda:removed  # ERROR_DEVICE_REMOVED on cuda, session-fatal
+EDGE_SIMULATE_DEVICE_FAULT=unsupported   # kCMErrorUnsupportedOperation, quarantine
+EDGE_SIMULATE_DEVICE_FAULT=runtime       # generic backend fault, quarantine
 ```
 
-With `EDGE_DEVICE_LADDER=cuda,cpu` and `EDGE_SIMULATE_DEVICE_FAULT=removed`, a worker
+The value is `[<tier>:]<fault>`, and it fires at most once per worker. Without a tier it faults
+whichever tier runs first. A `cuda:` target never touches a respawned cpu worker, which inherits
+the same environment.
+
+With `EDGE_DEVICE_LADDER=cuda,cpu` and `EDGE_SIMULATE_DEVICE_FAULT=cuda:removed`, a worker
 answers:
 
 ```json
@@ -526,4 +530,5 @@ and logs:
 [device-ladder] fell back to cpu, latency mode degraded
 ```
 
+The fallback is a real one: the cpu tier serves that same request and every one after it.
 Unset, the variable costs one `getenv` per generate call and nothing else.

@@ -1,6 +1,4 @@
 #!/bin/bash
-# The operator view. Reads the pidfile registry in $EDGE_STATE_DIR and the two
-# health endpoints, so it runs on the same host but starts and stops on its own.
 set -euo pipefail
 
 TIER=dashboard
