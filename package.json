@@ -1,0 +1,12 @@
+{
+  "name": "serveinfer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "ServeInfer test entry point. The services keep their own package.json files.",
+  "scripts": {
+    "test": "make test",
+    "test:js": "node --test tests/*.test.js",
+    "test:cpp": "make test-cpp"
+  }
+}
