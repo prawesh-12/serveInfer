@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const retryPath = path.join(__dirname, '..', 'mfes', 'document-qa', 'public', 'retry.js');
+const retryPath = path.join(__dirname, '..', 'clients', 'document-qa', 'public', 'retry.js');
 
 // retry.js is a browser script, not a module. It reads window.MFE_CONFIG once
 // when it loads, and puts its exports on window. So testing a different policy
@@ -29,7 +29,7 @@ test.after(() => {
 });
 
 test('the two MFEs ship the same retry helper', () => {
-  const other = path.join(__dirname, '..', 'mfes', 'meeting-summary', 'public', 'retry.js');
+  const other = path.join(__dirname, '..', 'clients', 'meeting-summary', 'public', 'retry.js');
   assert.equal(fs.readFileSync(retryPath, 'utf8'), fs.readFileSync(other, 'utf8'));
 });
 

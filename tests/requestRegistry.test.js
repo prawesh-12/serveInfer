@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { RequestRegistry } = require('../api-server/requestRegistry');
+const { RequestRegistry } = require('../backend/api-server/requestRegistry');
 const { deferred, sleep, waitFor } = require('./support');
 
 const tempDirs = [];
@@ -249,16 +249,26 @@ test('overlapping writes still publish valid JSON, not a mix of two payloads', a
     );
   }
   await Promise.all(jobs);
+  // Writes are async and serialised, so the file may not exist yet on the first
+  // look. Tolerate that rather than racing it.
   await waitFor(() => {
-    const snapshot = JSON.parse(fs.readFileSync(inflightPath, 'utf8'));
-    return snapshot.inflight.length === 0;
+    try {
+      return JSON.parse(fs.readFileSync(inflightPath, 'utf8')).inflight.length === 0;
+    } catch {
+      return false;
+    }
   });
 
   const parsed = JSON.parse(fs.readFileSync(inflightPath, 'utf8'));
   assert.deepEqual(parsed.inflight, []);
 
+  // Writes are serialised, so the last one can still be renaming when the
+  // published file already reads as empty. Wait for the steady state rather than
+  // asserting on a moment mid-write.
   const dir = path.dirname(inflightPath);
   const base = path.basename(inflightPath);
-  const leftovers = fs.readdirSync(dir).filter((name) => name.startsWith(`${base}.`) && name.endsWith('.tmp'));
-  assert.deepEqual(leftovers, [], 'no temp files left behind');
+  const leftovers = () =>
+    fs.readdirSync(dir).filter((name) => name.startsWith(`${base}.`) && name.endsWith('.tmp'));
+  await waitFor(() => leftovers().length === 0);
+  assert.deepEqual(leftovers(), [], 'no temp files left behind');
 });

@@ -34,7 +34,7 @@ nothing is being renamed. When you read `edge-supervisor` or `EDGE_MAX_SLOTS`, t
 ## 1. What ServeInfer is
 
 ServeInfer runs one large language model on one Linux machine and serves it to browser pages over
-HTTP. The model is `models/Phi-3-mini-4k-instruct-q4.gguf`, 2,393,231,072 bytes on disk.
+HTTP. The model is `backend/models/Phi-3-mini-4k-instruct-q4.gguf`, 2,393,231,072 bytes on disk.
 
 The problem it solves is the one you hit the moment you want more than a single-threaded local
 `llama.cpp` binary:
@@ -105,7 +105,7 @@ JSON.
 ### What it deliberately is not
 
 There's no user account system, no login and no password anywhere. There's no database. The
-api-server binds `127.0.0.1` only (`api-server/server.js:166`), so it never accepts remote traffic.
+api-server binds `127.0.0.1` only (`backend/api-server/server.js:166`), so it never accepts remote traffic.
 The build is POSIX only, since it uses `fork`, `execvp`, `AF_UNIX` and `shm_open` directly.
 
 ---
@@ -114,17 +114,17 @@ The build is POSIX only, since it uses `fork`, `execvp`, `AF_UNIX` and `shm_open
 
 This is the single most common source of confusion in the repo, so it comes before everything else.
 
-`scripts/start.sh` starts **two independent things**. They're not one tree, and one does not
+`scripts/backend.sh` starts **two independent things**. They're not one tree, and one does not
 supervise the other.
 
 ```mermaid
 flowchart TB
-    START["scripts/start.sh"]
+    START["scripts/backend.sh"]
 
     subgraph tree1["Tree 1: supervised"]
         SUP["edge-supervisor<br/>pidfile: supervisor.pid"]
         MC["edge-model-cache"]
-        API["node api-server/server.js"]
+        API["node backend/api-server/server.js"]
         W["edge-inference-worker x EDGE_WORKER_COUNT"]
         SUP --> MC
         SUP --> API
@@ -132,10 +132,10 @@ flowchart TB
     end
 
     subgraph tree2["Tree 2: plain background jobs"]
-        SH["node shell-app/server.js<br/>pidfile: shell.pid"]
-        DB["node system-dashboard/server.js<br/>pidfile: status-dashboard.pid"]
-        M1["node mfes/meeting-summary/server.js<br/>pidfile: meeting-mfe.pid"]
-        M2["node mfes/document-qa/server.js<br/>pidfile: doc-qa-mfe.pid"]
+        SH["node backend/shell-app/server.js<br/>pidfile: shell.pid"]
+        DB["node dashboard/server.js<br/>pidfile: status-dashboard.pid"]
+        M1["node clients/meeting-summary/server.js<br/>pidfile: meeting-mfe.pid"]
+        M2["node clients/document-qa/server.js<br/>pidfile: doc-qa-mfe.pid"]
     end
 
     START -- "fork + pidfile" --> SUP
@@ -149,8 +149,8 @@ flowchart TB
 ```
 
 The supervisor forks its three kinds of child in `Supervisor::start()`
-(`supervisor/supervisor.cpp:86-107`), in a fixed order: model-cache, then api-server, then the
-workers. `scripts/start.sh:187-264` launches all five background jobs and writes a pidfile for each
+(`backend/supervisor/supervisor.cpp:86-107`), in a fixed order: model-cache, then api-server, then the
+workers. `scripts/backend.sh` launches all five background jobs and writes a pidfile for each
 into `$EDGE_STATE_DIR`.
 
 ### What happens when you kill the supervisor
@@ -170,9 +170,9 @@ flowchart LR
     style G fill:#ffe8e8,stroke:#d94a4a
 ```
 
-The destructor at `supervisor/supervisor.cpp:80-84` calls `shutdownChildren()`, which sends SIGTERM
+The destructor at `backend/supervisor/supervisor.cpp:80-84` calls `shutdownChildren()`, which sends SIGTERM
 to every pid it tracks, waits two seconds, then SIGKILLs the survivors
-(`supervisor/supervisor.cpp:374-400`). It only ever tracked the processes it forked itself. The
+(`backend/supervisor/supervisor.cpp:374-400`). It only ever tracked the processes it forked itself. The
 shell, the dashboard and the MFE servers are still listening on their ports afterwards, and the
 browser will keep talking to a shell whose backend has vanished.
 
@@ -185,13 +185,13 @@ still listening on the five ports (`scripts/stop.sh:133-158`), then removes the 
 
 | Process | Class | Count | Who owns it | Restart policy |
 |---|---|---|---|---|
-| `edge-supervisor` | persistent | 1 | `start.sh` background job, pidfile | not restarted by anything |
+| `edge-supervisor` | persistent | 1 | `scripts/backend.sh` background job, pidfile | not restarted by anything |
 | `edge-model-cache` | persistent | 1 | supervisor | restarted on crash, behind the breaker, then all workers restart |
 | `api-server` (node) | persistent | 1 | supervisor | restarted on crash, behind the breaker |
 | `edge-inference-worker` | pooled | `EDGE_WORKER_COUNT` | supervisor | fixed-size pool, each slot restarted on crash, behind the breaker |
-| `shell-app` (node) | persistent | 1 | `start.sh` background job, pidfile | not supervised |
-| `system-dashboard` (node) | persistent | 1 | `start.sh` background job, pidfile | not supervised |
-| MFE static servers | persistent | 2 | `start.sh` background job, pidfile | not supervised |
+| `shell-app` (node) | persistent | 1 | `scripts/backend.sh` background job, pidfile | not supervised |
+| `dashboard` (node) | persistent | 1 | `scripts/backend.sh` background job, pidfile | not supervised |
+| MFE static servers | persistent | 2 | `scripts/backend.sh` background job, pidfile | not supervised |
 
 Nothing here is on-demand. No process is spawned per request. Workers are pre-forked into a fixed
 pool exactly so that a request never pays model load time.
@@ -200,15 +200,15 @@ pool exactly so that a request never pays model load time.
 
 | Process | Listen call | Reachable from |
 |---|---|---|
-| api-server | `app.listen(port, '127.0.0.1')` (`api-server/server.js:166`) | loopback only |
-| shell-app | `app.listen(port)` (`shell-app/server.js:281`) | **every interface** |
-| system-dashboard | `.listen(port, '127.0.0.1')` (`system-dashboard/server.js:312`) | loopback only |
-| meeting-summary MFE | `.listen(port, '127.0.0.1')` (`mfes/meeting-summary/server.js:58`) | loopback only |
-| document-qa MFE | `.listen(port, '127.0.0.1')` (`mfes/document-qa/server.js:58`) | loopback only |
+| api-server | `app.listen(port, '127.0.0.1')` (`backend/api-server/server.js:166`) | loopback only |
+| shell-app | `app.listen(port)` (`backend/shell-app/server.js:281`) | **every interface** |
+| system-dashboard | `.listen(port, '127.0.0.1')` (`dashboard/server.js:312`) | loopback only |
+| meeting-summary MFE | `.listen(port, '127.0.0.1')` (`clients/meeting-summary/server.js:58`) | loopback only |
+| document-qa MFE | `.listen(port, '127.0.0.1')` (`clients/document-qa/server.js:58`) | loopback only |
 
 The shell is the only process that binds beyond loopback, and it's the one with no authentication.
 On a shared network that's an open inference endpoint. If that matters to you, add the host argument
-to `shell-app/server.js:281`.
+to `backend/shell-app/server.js:281`.
 
 ---
 
@@ -216,12 +216,12 @@ to `shell-app/server.js:281`.
 
 Order is strict. The model-cache has to publish `ready=1` in the shared-memory header before the
 api-server or any worker starts. `Supervisor::waitForModelReady` blocks on that
-(`supervisor/supervisor.cpp:179-213`), polling every 50 ms with a 30 second deadline.
+(`backend/supervisor/supervisor.cpp:179-213`), polling every 50 ms with a 30 second deadline.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SH as scripts/start.sh
+    participant SH as scripts/backend.sh
     participant SUP as edge-supervisor
     participant MC as edge-model-cache
     participant SHM as /dev/shm
@@ -250,7 +250,7 @@ sequenceDiagram
     end
     SHM-->>SUP: magic == "EDGE" and ready == 1
 
-    SUP->>API: forkExec node api-server/server.js --supervisor-socket
+    SUP->>API: forkExec node backend/api-server/server.js --supervisor-socket
     API->>API: bind $EDGE_API_NOTIFY_SOCK, listen on 127.0.0.1:11434
     API->>API: RequestRegistry reads $EDGE_INFLIGHT_PATH from the last run
 
@@ -270,14 +270,14 @@ sequenceDiagram
 
 Two details in there that surprise people.
 
-**`start.sh` sleeps two seconds and moves on.** Line 210. There's no readiness check on the
+**`scripts/backend.sh` sleeps two seconds and moves on.** Line 210. There's no readiness check on the
 supervisor tree before the shell starts. If model loading is slow, the shell comes up first and its
 first few requests get `no_ready_workers` back from the api-server. The MFE retry policy covers
 that case, which is why it exists.
 
 **The worker's own mmap of the weights is validation, not the load path.** It maps the segment
-read-only (`inference-worker/worker.cpp:222`) to confirm the size matches the header, then hands
-llama the `/dev/shm` *path* (`inference-worker/worker.cpp:231-234`) and llama maps it again itself.
+read-only (`backend/inference-worker/worker.cpp:222`) to confirm the size matches the header, then hands
+llama the `/dev/shm` *path* (`backend/inference-worker/worker.cpp:231-234`) and llama maps it again itself.
 Two mappings of the same physical pages cost nothing extra.
 
 ### Startup failure modes
@@ -305,8 +305,8 @@ flowchart TD
 
 A worker that fails `init()` exits non-zero rather than serving. The commonest causes are a
 `.meta` header that isn't ready, a size mismatch between the mapped segment and the header
-(`inference-worker/worker.cpp:214-220`), and no usable tier in the device ladder
-(`inference-worker/worker.cpp:250-253`).
+(`backend/inference-worker/worker.cpp:214-220`), and no usable tier in the device ladder
+(`backend/inference-worker/worker.cpp:250-253`).
 
 ---
 
@@ -366,14 +366,14 @@ sequenceDiagram
     S-->>B: 200 {requestId, result, device, degraded, degradedReason}
 ```
 
-The shell strips the api-server's response headers. `shell-app/server.js:95-101` builds a fresh JSON
+The shell strips the api-server's response headers. `backend/shell-app/server.js:95-101` builds a fresh JSON
 body and sets nothing else, so `X-Inference-Device` and friends do not reach the browser on this
 route. The same information is in the body as `device` and `degraded`.
 
 ### 4.2 Streaming request, two SSE hops
 
 The api-server emits SSE to the shell. The shell parses that stream by hand
-(`shell-app/edgeAgentService.js:115-166`) and emits its own SSE to the browser, adding events the
+(`backend/shell-app/edgeAgentService.js:115-166`) and emits its own SSE to the browser, adding events the
 api-server knows nothing about.
 
 ```mermaid
@@ -449,7 +449,7 @@ flowchart LR
 ```
 
 `queued`, `started`, `cancelled` and `timeout` come from the scheduler's `onStatus` callback
-(`shell-app/server.js:187-210`). They never exist upstream of the shell. Changing a token payload
+(`backend/shell-app/server.js:187-210`). They never exist upstream of the shell. Changing a token payload
 shape means editing both hops plus both MFE clients.
 
 ### 4.3 Where each concurrency gate sits
@@ -494,9 +494,9 @@ Everything below comes from the source. Field names and shapes are what the code
 }
 ```
 
-`prompt` is required and trimmed (`shell-app/server.js:82`). `mfeId` defaults to `"doc-qa"`
-(`shell-app/server.js:83`). `priority` is normalised to exactly one of `high`, `normal`, `low`, with
-anything unrecognised becoming `normal` (`shell-app/server.js:59-64`). `requestId` defaults to a
+`prompt` is required and trimmed (`backend/shell-app/server.js:82`). `mfeId` defaults to `"doc-qa"`
+(`backend/shell-app/server.js:83`). `priority` is normalised to exactly one of `high`, `normal`, `low`, with
+anything unrecognised becoming `normal` (`backend/shell-app/server.js:59-64`). `requestId` defaults to a
 fresh `crypto.randomUUID()`.
 
 Success, HTTP 200:
@@ -516,11 +516,11 @@ Success, HTTP 200:
 `GET http://127.0.0.1:3000/api/stream?prompt=...&mfeId=meeting-summary&priority=high&requestId=...`
 
 Query params, not a body. `mfeId` defaults to `"meeting-summary"` here rather than `"doc-qa"`, and
-`priority` defaults to `"high"` (`shell-app/server.js:148-149`).
+`priority` defaults to `"high"` (`backend/shell-app/server.js:148-149`).
 
 The response is `text/event-stream`. Every request emits `queued` first, even one that starts
 immediately, because `enqueue` pushes onto the queue array and notifies before calling `_schedule()`
-(`shell-app/scheduler.js:93-98`). A request that runs at once shows `position: 1`.
+(`backend/shell-app/scheduler.js:93-98`). A request that runs at once shows `position: 1`.
 
 ```
 event: queued
@@ -584,8 +584,8 @@ Execution phase:
 ```
 
 `ranMs` is absent on the queue variant and `waitedMs` is absent on the execution variant, because
-`_notify` spreads only the payload it was given (`shell-app/scheduler.js:360-368`). The shell reads
-both and lets `JSON.stringify` drop the undefined one (`shell-app/server.js:201-208`).
+`_notify` spreads only the payload it was given (`backend/shell-app/scheduler.js:360-368`). The shell reads
+both and lets `JSON.stringify` drop the undefined one (`backend/shell-app/server.js:201-208`).
 
 `error`:
 
@@ -600,12 +600,12 @@ both and lets `JSON.stringify` drop the undefined one (`shell-app/server.js:201-
 ```
 
 `retryAfterSeconds` appears only when the upstream payload carried one
-(`shell-app/server.js:230-232`). `retryable` appears only for `SchedulerError`
-(`shell-app/server.js:233-236`).
+(`backend/shell-app/server.js:230-232`). `retryable` appears only for `SchedulerError`
+(`backend/shell-app/server.js:233-236`).
 
 ### 5.3 Shell to api-server, buffered
 
-`POST http://127.0.0.1:11434/infer`, built at `shell-app/edgeAgentService.js:31-36`:
+`POST http://127.0.0.1:11434/infer`, built at `backend/shell-app/edgeAgentService.js:31-36`:
 
 ```json
 {
@@ -630,7 +630,7 @@ Response, HTTP 200:
 }
 ```
 
-Headers on that response (`api-server/routes/infer.js:46-52`):
+Headers on that response (`backend/api-server/routes/infer.js:46-52`):
 
 ```
 X-Idempotent-Replay: false
@@ -644,7 +644,7 @@ X-Latency-Mode: normal
 ### 5.4 Shell to api-server, streaming
 
 `GET http://127.0.0.1:11434/infer/stream?requestId=...&prompt=...&mfeId=...`, built at
-`shell-app/edgeAgentService.js:85-96` with `Accept: text/event-stream`.
+`backend/shell-app/edgeAgentService.js:85-96` with `Accept: text/event-stream`.
 
 Three event types come back and no more:
 
@@ -665,7 +665,7 @@ information rides in the `done` payload instead.
 ### 5.5 api-server to worker
 
 One AF_UNIX connection per request, to `$EDGE_WORKER_SOCKET_PREFIX{id}.sock`. One line of JSON,
-newline terminated (`api-server/ipc.js:149-156` for streaming, `api-server/ipc.js:391-398` for
+newline terminated (`backend/api-server/ipc.js:149-156` for streaming, `backend/api-server/ipc.js:391-398` for
 buffered):
 
 ```json
@@ -673,11 +673,11 @@ buffered):
 ```
 
 The worker's `parseJob` reads `type`, `requestId`, `prompt` and `stream` only
-(`inference-worker/worker.cpp:355-371`). It never reads `mfeId`. The field is sent and ignored.
+(`backend/inference-worker/worker.cpp:355-371`). It never reads `mfeId`. The field is sent and ignored.
 
 ### 5.6 Worker replies
 
-Built by string concatenation in `Worker::handleClient` (`inference-worker/worker.cpp:414-441`).
+Built by string concatenation in `Worker::handleClient` (`backend/inference-worker/worker.cpp:414-441`).
 Each is one line terminated with `\n`.
 
 Token, streaming only:
@@ -687,7 +687,7 @@ Token, streaming only:
 ```
 
 Result, both modes. The device fields come from `Worker::deviceResultFields`
-(`inference-worker/worker.cpp:316-324`):
+(`backend/inference-worker/worker.cpp:316-324`):
 
 ```json
 {"type":"result","requestId":"s1","text":"Budget approved.","device":"cuda","degraded":false}
@@ -701,8 +701,8 @@ When the ladder fell back, `degradedReason` appears and names the tier plus the 
 
 `degradedReason` is absent, not null, when `degraded` is false.
 
-Error. Note there's no `requestId` on this frame (`inference-worker/worker.cpp:404`,
-`inference-worker/worker.cpp:410`):
+Error. Note there's no `requestId` on this frame (`backend/inference-worker/worker.cpp:404`,
+`backend/inference-worker/worker.cpp:410`):
 
 ```json
 {"type":"error","error":"missing prompt"}
@@ -713,58 +713,58 @@ Error. Note there's no `requestId` on this frame (`inference-worker/worker.cpp:4
 ```
 
 The api-server turns any `error` frame into a `WorkerPoolError` with code `worker_error` and HTTP
-status 502 (`api-server/ipc.js:186-193`).
+status 502 (`backend/api-server/ipc.js:186-193`).
 
 ### 5.7 Worker to supervisor, heartbeat
 
-Every `heartbeatIntervalMs`, hardcoded to 50 ms at `inference-worker/main.cpp:61` and only
-changeable with the `--heartbeat-ms` flag that `start.sh` never passes:
+Every `heartbeatIntervalMs`, hardcoded to 50 ms at `backend/inference-worker/main.cpp:61` and only
+changeable with the `--heartbeat-ms` flag that `scripts/backend.sh` never passes:
 
 ```json
 {"type":"heartbeat","workerId":2,"status":"ready","device":"cuda"}
 ```
 
 The supervisor accepts the connection, reads until EOF and throws the bytes away
-(`supervisor/supervisor.cpp:432-461`). Heartbeats are not yet a liveness signal. Worker death is
+(`backend/supervisor/supervisor.cpp:432-461`). Heartbeats are not yet a liveness signal. Worker death is
 detected by `waitpid`, not by a missed heartbeat.
 
 ### 5.8 Supervisor to api-server, crash notification
 
 Over `$EDGE_API_NOTIFY_SOCK`, from `Supervisor::notifyApiServerWorkerCrash`
-(`supervisor/supervisor.cpp:531-532`):
+(`backend/supervisor/supervisor.cpp:531-532`):
 
 ```json
 {"type":"worker_crashed","workerId":2,"requestId":""}
 ```
 
 `requestId` is always the empty string. The api-server therefore takes the "fail everything on that
-worker" branch rather than the "fail one request" branch (`api-server/ipc.js:267-274`).
+worker" branch rather than the "fail one request" branch (`backend/api-server/ipc.js:267-274`).
 
-The api-server also handles `worker_ready` and `worker_restarted` (`api-server/ipc.js:70`), but
+The api-server also handles `worker_ready` and `worker_restarted` (`backend/api-server/ipc.js:70`), but
 nothing in the supervisor ever sends either message. See the contradictions list in section 8.
 
 ### 5.9 Files on disk
 
 Crash log, one JSON object per line, appended to `$EDGE_CRASH_LOG`
-(`supervisor/supervisor.cpp:468-470`):
+(`backend/supervisor/supervisor.cpp:468-470`):
 
 ```json
 {"ts":1755856320,"pid":48213,"type":"worker","workerId":2,"status":11,"reason":"signal_11"}
 ```
 
-`reason` is `exit_<code>`, `signal_<n>` or `stopped_<n>` (`supervisor/supervisor.cpp:578-588`). A
+`reason` is `exit_<code>`, `signal_<n>` or `stopped_<n>` (`backend/supervisor/supervisor.cpp:578-588`). A
 segfault reads `signal_11`, which is this build's analogue of the Windows access violation the
 assignment describes.
 
 Model config snapshot, truncated and rewritten at every supervisor start
-(`supervisor/supervisor.cpp:478-480`):
+(`backend/supervisor/supervisor.cpp:478-480`):
 
 ```json
 {"modelPath":"/abs/path/models/Phi-3-mini-4k-instruct-q4.gguf","shmName":"/edge-model-weights","workerCount":4,"pollIntervalMs":50}
 ```
 
 In-flight registry, written with temp file plus rename on every state change
-(`api-server/requestRegistry.js:121-138`):
+(`backend/api-server/requestRegistry.js:121-138`):
 
 ```json
 {"pid":48210,"updatedAt":"2026-08-22T07:12:03.441Z","inflight":[{"requestId":"s1","mfeId":"doc-qa","stream":true,"startedAt":1755856323441}]}
@@ -781,7 +781,7 @@ per line.
 
 Every route sits behind an origin allowlist. If the `Origin` header is present and appears in
 `EDGE_ALLOWED_MFE_ORIGINS`, CORS headers are set. If it's present and absent from the list, no CORS
-headers go out and the browser drops the response (`shell-app/server.js:39-52`). `OPTIONS` always
+headers go out and the browser drops the response (`backend/shell-app/server.js:39-52`). `OPTIONS` always
 returns 204.
 
 #### `GET /`
@@ -837,11 +837,11 @@ X-Accel-Buffering: no
 ```
 
 Failures arrive as an `error` event inside the stream, not as an HTTP status, because the headers
-are already flushed (`shell-app/server.js:157-161`). Events: `queued`, `started`, `token`, `done`,
+are already flushed (`backend/shell-app/server.js:157-161`). Events: `queued`, `started`, `token`, `done`,
 `cancelled`, `timeout`, `error`. Payloads are in section 5.2.
 
 Closing the `EventSource` triggers `req.on('close')`, which cancels the job
-(`shell-app/server.js:170-179`). A queued job is dropped and rejected. An active job has its
+(`backend/shell-app/server.js:170-179`). A queued job is dropped and rejected. An active job has its
 `AbortController` aborted, which propagates through the shell's `fetch` to the api-server.
 
 #### `POST /api/cancel`
@@ -942,14 +942,14 @@ Errors:
 | 502 | `{"error":"worker_unavailable","message","requestId"}` | none |
 
 The 502 catch-all covers `worker_connect_timeout`, `worker_socket_error`, `worker_closed` and
-`worker_bad_json`, all defined in `api-server/ipc.js`.
+`worker_bad_json`, all defined in `backend/api-server/ipc.js`.
 
 #### `GET /infer/stream`
 
 Query: `prompt` (required), `requestId` (default a fresh UUID), `mfeId` (default `""`).
 
 Before any headers go out, the route asks the registry what state that id is in
-(`api-server/routes/infer.js:102-107`):
+(`backend/api-server/routes/infer.js:102-107`):
 
 | Prior state | Result |
 |---|---|
@@ -990,7 +990,7 @@ Errors after the headers are flushed become an `error` event in the stream, foll
 
 `uptime` is in seconds. `orphanedFromPreviousRun` is what the previous api-server process had open
 when it died, read back from `$EDGE_INFLIGHT_PATH` at construction
-(`api-server/requestRegistry.js:19`).
+(`backend/api-server/requestRegistry.js:19`).
 
 ### 6.3 system-dashboard, port `EDGE_STATUS_DASHBOARD_PORT` (3001)
 
@@ -998,13 +998,13 @@ when it died, read back from `$EDGE_INFLIGHT_PATH` at construction
 |---|---|
 | `GET /status` | aggregated JSON, see below |
 | `GET /dashboard-config.js` | `window.DASHBOARD_CONFIG = {shellBase, apiBase, meetingMfeUrl, docQaMfeUrl};` |
-| `GET /` and static files | the dashboard page from `system-dashboard/public/` |
+| `GET /` and static files | the dashboard page from `dashboard/public/` |
 
-`/status` fans out to five places in parallel (`system-dashboard/server.js:253-275`): the shell's
+`/status` fans out to five places in parallel (`dashboard/server.js:253-275`): the shell's
 `/api/health` and `/api/agent-health`, the api-server's `/health`, and a plain reachability check on
 each MFE URL. It also shells out to `ps -eo pid=,ppid=,stat=,etime=,cmd=` and classifies every
 matching process by command line, falling back to the pidfiles in `$EDGE_STATE_DIR`
-(`system-dashboard/server.js:173-251`).
+(`dashboard/server.js:173-251`).
 
 ### 6.4 MFE static servers, ports 5001 and 5002
 
@@ -1076,10 +1076,10 @@ stateDiagram-v2
     rejected429 --> [*]
 ```
 
-Every terminal state writes an entry into the `done` map (`shell-app/scheduler.js:341-344`), which
+Every terminal state writes an entry into the `done` map (`backend/shell-app/scheduler.js:341-344`), which
 is what `GET /api/queue-status` reads afterwards. That map is evicted by TTL
 (`EDGE_DONE_TTL_MS`) and then hard-capped at `EDGE_DONE_MAX_ENTRIES`
-(`shell-app/scheduler.js:347-358`). Without that it grew for the life of the shell process.
+(`backend/shell-app/scheduler.js:347-358`). Without that it grew for the life of the shell process.
 
 ### 7.3 Admission
 
@@ -1097,7 +1097,7 @@ flowchart TD
     H --> B
 ```
 
-`_canRun` is two checks and nothing more (`shell-app/scheduler.js:225-229`):
+`_canRun` is two checks and nothing more (`backend/shell-app/scheduler.js:225-229`):
 
 ```js
 if (this.active.size >= this.maxSlots) return false;
@@ -1110,8 +1110,8 @@ budget. The cap is a fairness mechanism between cooperating apps, not a security
 
 ### 7.4 Priority and aging
 
-Three priorities with base scores 300, 200 and 100 (`shell-app/scheduler.js:196-200`). Every
-`EDGE_AGING_MS` a job spends queued adds one point (`shell-app/scheduler.js:202-205`):
+Three priorities with base scores 300, 200 and 100 (`backend/shell-app/scheduler.js:196-200`). Every
+`EDGE_AGING_MS` a job spends queued adds one point (`backend/shell-app/scheduler.js:202-205`):
 
 ```
 effective = base(priority) + floor((now - createdAt) / EDGE_AGING_MS)
@@ -1141,7 +1141,7 @@ the shipped 15 s is roughly 25 minutes. That's slow, and it's the setting to tur
 starvation protection that actually bites within a session. Ties break on arrival time, so equal
 scores are FIFO.
 
-The Document Q&A page has a "Burst LOW x5" button (`mfes/document-qa/public/app.js:216-221`) that
+The Document Q&A page has a "Burst LOW x5" button (`clients/document-qa/public/app.js:216-221`) that
 fires five low-priority requests at once. It exists to make the queue positions visible in the
 browser.
 
@@ -1153,7 +1153,7 @@ estimatedWaitMs = batchesAhead * avgDurationMs
 ```
 
 `avgDurationMs` is an exponentially weighted average, 70 percent old and 30 percent new, updated
-after every job finishes (`shell-app/scheduler.js:329`). It's seeded from `EDGE_DEFAULT_JOB_MS`, so
+after every job finishes (`backend/shell-app/scheduler.js:329`). It's seeded from `EDGE_DEFAULT_JOB_MS`, so
 the first few estimates are that constant. The estimate ignores priority entirely, so a low-priority
 job's ETA is optimistic whenever higher-priority work keeps arriving.
 
@@ -1199,11 +1199,11 @@ sequenceDiagram
 | execution | `EDGE_EXEC_TIMEOUT_MS` (120 s) | `timeout` with `phase: "execution"`, `ranMs` | 504 | aborting the `AbortController` |
 
 The queue timer fires blind and then checks whether the job is still in the queue array
-(`shell-app/scheduler.js:66-70`). If it isn't, the callback returns and does nothing. `_run` also
-clears it explicitly (`shell-app/scheduler.js:257`).
+(`backend/shell-app/scheduler.js:66-70`). If it isn't, the callback returns and does nothing. `_run` also
+clears it explicitly (`backend/shell-app/scheduler.js:257`).
 
 Before the execution timeout existed, a wedged in-flight request held its slot for the life of the
-process. Nothing downstream covered it, because `api-server/ipc.js` only has socket connect
+process. Nothing downstream covered it, because `backend/api-server/ipc.js` only has socket connect
 timeouts and the worker has none at all.
 
 Set `EDGE_EXEC_TIMEOUT_MS` for the slowest tier on your device ladder, not the fastest. A legitimate
@@ -1279,7 +1279,7 @@ sequenceDiagram
 
 Two independent paths detect the death, and both call the same `fail` closure. The `done` flag in
 `_runRequest` and `failInFlight` makes the second one a no-op
-(`api-server/ipc.js:130-140`, `api-server/ipc.js:368-375`).
+(`backend/api-server/ipc.js:130-140`, `backend/api-server/ipc.js:368-375`).
 
 ### 8.2 The circuit breaker
 
@@ -1305,18 +1305,18 @@ flowchart TD
 ```
 
 Threshold and window are compile-time constants: three crashes in sixty seconds
-(`supervisor/supervisor.h:48-49`). The restart decision ORs the in-memory deque with a re-read of
-the crash log from disk (`supervisor/supervisor.cpp:341`), so the rule survives a supervisor
+(`backend/supervisor/supervisor.h:48-49`). The restart decision ORs the in-memory deque with a re-read of
+the crash log from disk (`backend/supervisor/supervisor.cpp:341`), so the rule survives a supervisor
 restart. `crashLimitOpenFromDisk` parses the log with three regexes and counts lines newer than
 `now - 60` that match the process type, plus the worker id when the type is `worker`
-(`supervisor/supervisor.cpp:483-517`).
+(`backend/supervisor/supervisor.cpp:483-517`).
 
 Consequence worth knowing. `$EDGE_CRASH_LOG` is append-only and nothing rotates it. A long-lived
 deployment reparses a growing file on every crash. It's a `/tmp` path by default, so a reboot clears
 it.
 
 A model-cache crash is the expensive one. It restarts the cache, waits for `ready=1` again, then
-SIGTERMs and restarts every worker (`supervisor/supervisor.cpp:402-420`), because the workers'
+SIGTERMs and restarts every worker (`backend/supervisor/supervisor.cpp:402-420`), because the workers'
 mappings point at a shared-memory object that no longer exists.
 
 ### 8.3 Worker states in the pool
@@ -1337,27 +1337,27 @@ stateDiagram-v2
 
 `_refreshWorkerReadiness` runs on every acquire and flips any non-busy, non-crashed worker between
 `starting` and `ready` purely on whether the socket file exists
-(`api-server/ipc.js:251-258`). That's a file existence check, not a liveness check. The recovery
+(`backend/api-server/ipc.js:251-258`). That's a file existence check, not a liveness check. The recovery
 probe is the one that actually connects.
 
 Recovery backs off linearly: `EDGE_WORKER_RECOVERY_MS * attempt`, so with the shipped 2000 ms and 10
 attempts the last probe lands about 110 seconds after the crash
-(`api-server/ipc.js:294-319`). A stale socket file left behind by a dead process refuses the
+(`backend/api-server/ipc.js:294-319`). A stale socket file left behind by a dead process refuses the
 connection, which is exactly the case the old bare timer got wrong: it flipped the worker back to
 `ready` after 2000 ms whether or not a replacement had started, so a restart the breaker had
 suppressed still got handed requests.
 
 ### 8.4 Two contradictions in the recovery path
 
-**`worker_ready` has no sender.** `api-server/ipc.js:300` says "only a supervisor `worker_ready`
+**`worker_ready` has no sender.** `backend/api-server/ipc.js:300` says "only a supervisor `worker_ready`
 notification brings it back now", and `handleSupervisorMessage` handles both `worker_ready` and
-`worker_restarted` (`api-server/ipc.js:70-78`). The supervisor's only outbound message is
-`worker_crashed` (`supervisor/supervisor.cpp:531`). Once a worker exhausts its recovery attempts, in
+`worker_restarted` (`backend/api-server/ipc.js:70-78`). The supervisor's only outbound message is
+`worker_crashed` (`backend/supervisor/supervisor.cpp:531`). Once a worker exhausts its recovery attempts, in
 practice nothing brings it back short of restarting the api-server. A supervisor-side notify on
 successful `startWorker` would close that.
 
-**`CircuitBreaker::isOpen` is never called.** It's declared at `supervisor/supervisor.h:45`, defined
-at `supervisor/supervisor.cpp:58-64`, and has no call site. The live check is `registerCrash`'s
+**`CircuitBreaker::isOpen` is never called.** It's declared at `backend/supervisor/supervisor.h:45`, defined
+at `backend/supervisor/supervisor.cpp:58-64`, and has no call site. The live check is `registerCrash`'s
 return value, which reports "this crash was the third", so the breaker is queried only at the moment
 it trips.
 
@@ -1384,9 +1384,9 @@ The full treatment, including the decision trees for the Qualcomm NPU and Apple 
 escalation-order tradeoffs, is in [`docs/device-fallback.md`](docs/device-fallback.md). This section
 is the summary and the pointer.
 
-`inference-worker/deviceLadder.cpp` owns tier selection, quarantine and the health-check gate. The
-worker asks it for a tier at startup (`inference-worker/worker.cpp:243-258`) and escalates through
-it whenever a generate call reports a fault (`inference-worker/worker.cpp:263-276`).
+`backend/inference-worker/deviceLadder.cpp` owns tier selection, quarantine and the health-check gate. The
+worker asks it for a tier at startup (`backend/inference-worker/worker.cpp:243-258`) and escalates through
+it whenever a generate call reports a fault (`backend/inference-worker/worker.cpp:263-276`).
 
 ```mermaid
 flowchart TD
@@ -1409,18 +1409,18 @@ flowchart TD
 Four things to carry away.
 
 **`degraded` is measured against a startup baseline, not against `activeDevice_ == "cpu"`.** The
-first successful `select()` records `baselineIndex_` (`inference-worker/deviceLadder.cpp:106-110`),
-and `degraded()` is `activeIndex_ > baselineIndex_` (`inference-worker/deviceLadder.h:54`). A
+first successful `select()` records `baselineIndex_` (`backend/inference-worker/deviceLadder.cpp:106-110`),
+and `degraded()` is `activeIndex_ > baselineIndex_` (`backend/inference-worker/deviceLadder.h:54`). A
 CPU-only machine is not degraded. A machine that fell off `cuda` onto `cpu` is. Reporting it any
 other way makes the flag meaningless.
 
 **A quarantine expiring isn't enough to bring a tier back.** `select()` calls `healthCheck()` on
-every candidate (`inference-worker/deviceLadder.cpp:101-103`), and a tier whose probe fails stays
+every candidate (`backend/inference-worker/deviceLadder.cpp:101-103`), and a tier whose probe fails stays
 out even after its window closes.
 
 **A tier with no backend compiled in fails its probe and gets skipped.** `probeTier` returns true
 for `cpu`, checks `access("/dev/nvidia0")` for `cuda`, and returns false for everything else
-including `npu`, `ane`, `metal` and `remote` (`inference-worker/deviceLadder.cpp:13-22`). So
+including `npu`, `ane`, `metal` and `remote` (`backend/inference-worker/deviceLadder.cpp:13-22`). So
 declaring `EDGE_DEVICE_LADDER=npu,cuda,cpu` on this Linux box selects `cuda` and reports not
 degraded, which is the correct answer.
 
@@ -1436,19 +1436,19 @@ EDGE_SIMULATE_DEVICE_FAULT=unsupported  # kCMErrorUnsupportedOperation, quaranti
 EDGE_SIMULATE_DEVICE_FAULT=runtime      # generic backend fault, quarantine only
 ```
 
-Read once per `generate` call at `inference-worker/inferEngine.cpp:20-35`. Unset, it costs one
+Read once per `generate` call at `backend/inference-worker/inferEngine.cpp:20-35`. Unset, it costs one
 `getenv` and nothing else. It's deliberately absent from `.env.example`, so you set it in the
 environment when you want it.
 
 One rough edge. `DeviceLadder` stores `probeInterval_` from `EDGE_DEVICE_PROBE_INTERVAL_MS`
-(`inference-worker/deviceLadder.cpp:69`) and never reads it. Probing happens on demand inside
+(`backend/inference-worker/deviceLadder.cpp:69`) and never reads it. Probing happens on demand inside
 `select()`, not on a timer, so that variable currently has no effect.
 
 ---
 
 ## 10. Idempotency and the request registry
 
-`api-server/requestRegistry.js` does two jobs from one data structure.
+`backend/api-server/requestRegistry.js` does two jobs from one data structure.
 
 ```mermaid
 flowchart TD
@@ -1470,20 +1470,20 @@ flowchart TD
 ```
 
 **Concurrent submissions coalesce.** Two requests with one id share a single inference run, because
-the second gets the first one's promise back (`api-server/requestRegistry.js:73-77`).
+the second gets the first one's promise back (`backend/api-server/requestRegistry.js:73-77`).
 
 **Successes are cached for `EDGE_IDEMPOTENCY_TTL_MS`.** A replay after success returns the original
 answer, with `X-Idempotent-Replay: true` and `replay: true` in the body. Send a different prompt
 under a used id inside the window and you get the first answer back. That's the contract, not a bug.
 
-**Failures are deliberately not cached** (`api-server/requestRegistry.js:86-92`). Caching them
+**Failures are deliberately not cached** (`backend/api-server/requestRegistry.js:86-92`). Caching them
 would make an id un-retryable forever, and the whole point of the same-id retry is that the client
 can come back.
 
 ### The streaming replay problem
 
 Tokens already sent can't be un-sent, so the streaming route doesn't use `run()`'s coalescing
-blindly. It calls `lookup()` first (`api-server/routes/infer.js:102`) and branches:
+blindly. It calls `lookup()` first (`backend/api-server/routes/infer.js:102`) and branches:
 
 ```mermaid
 sequenceDiagram
@@ -1520,7 +1520,7 @@ single `done` event.
 ### The in-flight file
 
 `$EDGE_INFLIGHT_PATH` names what was open. It's rewritten on every state change with a temp file
-plus rename (`api-server/requestRegistry.js:132-137`), so a reader never sees a half-written file.
+plus rename (`backend/api-server/requestRegistry.js:132-137`), so a reader never sees a half-written file.
 At construction the registry reads whatever the previous process left behind and exposes it under
 `/health` as `requests.orphanedFromPreviousRun`.
 
@@ -1541,7 +1541,7 @@ Four workers loading a 2.3 GB GGUF each costs about 9.5 GB. ServeInfer loads it 
 sequenceDiagram
     autonumber
     participant MC as edge-model-cache
-    participant DISK as models/*.gguf
+    participant DISK as backend/models/*.gguf
     participant SHM as /dev/shm/edge-model-weights
     participant META as /dev/shm/edge-model-weights.meta
     participant W as worker[i]
@@ -1574,7 +1574,7 @@ sequenceDiagram
 ### The header
 
 `SharedModelHeader` is 256 bytes, enforced by a `static_assert`
-(`model-cache/model_cache.h:8-18`):
+(`backend/model-cache/model_cache.h:8-18`):
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -1590,16 +1590,16 @@ The header lives in its own shared-memory object, `$EDGE_SHM_NAME.meta`. Keeping
 weights object means a reader can map 256 bytes to check readiness without mapping 2.3 GB.
 
 The checksum is FNV-1a, offset basis `14695981039346656037`, prime `1099511628211`
-(`model-cache/model_cache.cpp:20-21`), folded chunk by chunk as the file is copied
-(`model-cache/model_cache.cpp:58-65`). It's an integrity marker, not a security control. Nothing
+(`backend/model-cache/model_cache.cpp:20-21`), folded chunk by chunk as the file is copied
+(`backend/model-cache/model_cache.cpp:58-65`). It's an integrity marker, not a security control. Nothing
 currently recomputes it to verify: the worker reads it and logs it
-(`inference-worker/worker.cpp:236-237`), and validates size and the ready flag instead.
+(`backend/inference-worker/worker.cpp:236-237`), and validates size and the ready flag instead.
 
 ### Why the workers repoint their model path
 
 ```mermaid
 flowchart LR
-    A["worker starts with<br/>--model-path ./models/....gguf"] --> B["attachSharedMemory"]
+    A["worker starts with<br/>--model-path ./backend/models/....gguf"] --> B["attachSharedMemory"]
     B --> C{"/dev/shm/edge-model-weights<br/>readable?"}
     C -- yes --> D["config_.modelPath =<br/>/dev/shm/edge-model-weights"]
     C -- no --> E["keep the disk path"]
@@ -1612,14 +1612,14 @@ flowchart LR
     style I fill:#fff4e8
 ```
 
-`inference-worker/worker.cpp:231-234` is the whole trick. A worker restart maps pages that are
+`backend/inference-worker/worker.cpp:231-234` is the whole trick. A worker restart maps pages that are
 already resident instead of re-reading 2.3 GB from disk, and N workers share one physical copy.
 
 ### Lifecycle notes
 
 The model cache holds its mappings and blocks in `waitUntilStopped()` until a signal arrives
-(`model-cache/model_cache.cpp:52-56`). On a clean exit its destructor `shm_unlink`s both objects
-(`model-cache/model_cache.cpp:220-230`). On a hard kill it doesn't, which is why `scripts/stop.sh`
+(`backend/model-cache/model_cache.cpp:52-56`). On a clean exit its destructor `shm_unlink`s both objects
+(`backend/model-cache/model_cache.cpp:220-230`). On a hard kill it doesn't, which is why `scripts/stop.sh`
 removes `/dev/shm/${SHM_NAME#/}` and its `.meta` explicitly (`scripts/stop.sh:161`). A leftover
 object from a previous run with a different model size is a common cause of a worker refusing to
 start with `shared memory size mismatch`.
@@ -1672,16 +1672,16 @@ flowchart TB
 | `EDGE_SHM_NAME` and `.meta` | model-cache to workers | not a socket | GGUF bytes plus the 256-byte header | POSIX shared memory |
 
 Socket creation and teardown are symmetric on both sides. The supervisor unlinks its path before
-binding (`supervisor/supervisor.cpp:126-128`) and again on shutdown
-(`supervisor/supervisor.cpp:422-430`). The worker does the same
-(`inference-worker/worker.cpp:332`, `inference-worker/worker.cpp:83-85`). The api-server unlinks
-before binding (`api-server/server.js:66-72`) and registers cleanup on SIGTERM, SIGINT and exit
-(`api-server/server.js:115-117`). Leftover socket files are still the commonest cause of a failed
+binding (`backend/supervisor/supervisor.cpp:126-128`) and again on shutdown
+(`backend/supervisor/supervisor.cpp:422-430`). The worker does the same
+(`backend/inference-worker/worker.cpp:332`, `backend/inference-worker/worker.cpp:83-85`). The api-server unlinks
+before binding (`backend/api-server/server.js:66-72`) and registers cleanup on SIGTERM, SIGINT and exit
+(`backend/api-server/server.js:115-117`). Leftover socket files are still the commonest cause of a failed
 boot, which is why `stop.sh` removes them all.
 
 ### The C++ side has no JSON library
 
-The worker extracts fields with `std::regex` (`inference-worker/worker.cpp:22-67`):
+The worker extracts fields with `std::regex` (`backend/inference-worker/worker.cpp:22-67`):
 
 ```cpp
 const std::regex pattern("\"" + key + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
@@ -1689,8 +1689,8 @@ const std::regex pattern("\"" + key + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 
 and builds replies by string concatenation with a hand-rolled `jsonEscape` that handles exactly five
 characters: backslash, quote, newline, carriage return and tab
-(`inference-worker/worker.cpp:508-534`). The supervisor has its own identical copy
-(`supervisor/supervisor.cpp:550-576`).
+(`backend/inference-worker/worker.cpp:508-534`). The supervisor has its own identical copy
+(`backend/supervisor/supervisor.cpp:550-576`).
 
 Three consequences.
 
@@ -1707,7 +1707,7 @@ output rarely contains them, but a prompt with a raw `\x01` produces a line that
 on the Node side, which surfaces as `worker_bad_json` and a 502.
 
 The Node side is the mirror image: `JSON.stringify` out, and a manual buffer split on `\n` with
-`JSON.parse` per line in (`api-server/ipc.js:159-212`).
+`JSON.parse` per line in (`backend/api-server/ipc.js:159-212`).
 
 ---
 
@@ -1718,7 +1718,7 @@ Node code.
 
 ```mermaid
 flowchart TD
-    A["process starts"] --> B["config/env.js records<br/>initialKeys = Object.keys(process.env)"]
+    A["process starts"] --> B["backend/config/env.js records<br/>initialKeys = Object.keys(process.env)"]
     B --> C["loadFile('.env.example', override = false)"]
     C --> D["loadFile('.env', override = true)"]
     D --> E{"requiredEnv(name)"}
@@ -1734,17 +1734,17 @@ flowchart TD
 
 Precedence, highest first:
 
-1. A variable already in the real process environment when `config/env.js` loads. `loadFile` skips
-   any key in `initialKeys` outright (`config/env.js:39`).
+1. A variable already in the real process environment when `backend/config/env.js` loads. `loadFile` skips
+   any key in `initialKeys` outright (`backend/config/env.js:39`).
 2. `.env`, which is gitignored and overrides loaded values.
 3. `.env.example`, which is tracked.
 
 That ordering has a consequence you'll trip over exactly once. **A new config value must go into
-`.env.example`, not just `.env`, or a fresh clone crashes at startup.** `scripts/start.sh:29-73`
+`.env.example`, not just `.env`, or a fresh clone crashes at startup.** `scripts/backend.sh`
 also keeps its own explicit list of required variables that needs the same update.
 
-The C++ side reads the same variables, through `ipc/paths.h` for the paths and `getenv` directly for
-the rest (`inference-worker/main.cpp:63-91`, `supervisor/main.cpp:45-50`). C++ has no `requiredEnv`
+The C++ side reads the same variables, through `backend/ipc/paths.h` for the paths and `getenv` directly for
+the rest (`backend/inference-worker/main.cpp:63-91`, `backend/supervisor/main.cpp:45-50`). C++ has no `requiredEnv`
 equivalent: a missing variable becomes an empty string and each `main` checks the ones it needs.
 
 ### Every variable
@@ -1756,17 +1756,17 @@ defaults.
 
 | Variable | Default | Meaning | If missing or wrong |
 |---|---|---|---|
-| `EDGE_STATE_DIR` | `/tmp/edge-runtime` | directory for the five pidfiles | `start.sh` aborts, `stop.sh` cannot find processes to kill |
-| `EDGE_WORKER_COUNT` | `4` | size of the worker pool | `start.sh` aborts, and if it exceeds `EDGE_MAX_SLOTS` you're paying for idle workers |
-| `EDGE_MODEL_PATH` | `./models/Phi-3-mini-4k-instruct-q4.gguf` | GGUF the model-cache reads, resolved to an absolute path by `scripts/start.sh:88-90` | `start.sh` aborts with `missing model file` |
-| `EDGE_FORCE_CPU` | `0` | `1` collapses the ladder to `{"cpu"}` (`inference-worker/worker.cpp:245-247`) | `start.sh` aborts |
+| `EDGE_STATE_DIR` | `/tmp/edge-runtime` | directory for the five pidfiles | `scripts/backend.sh` aborts, `stop.sh` cannot find processes to kill |
+| `EDGE_WORKER_COUNT` | `4` | size of the worker pool | `scripts/backend.sh` aborts, and if it exceeds `EDGE_MAX_SLOTS` you're paying for idle workers |
+| `EDGE_MODEL_PATH` | `./backend/models/Phi-3-mini-4k-instruct-q4.gguf` | GGUF the model-cache reads, resolved to an absolute path by `scripts/backend.sh` | `scripts/backend.sh` aborts with `missing model file` |
+| `EDGE_FORCE_CPU` | `0` | `1` collapses the ladder to `{"cpu"}` (`backend/inference-worker/worker.cpp:245-247`) | `scripts/backend.sh` aborts |
 | `EDGE_LOG_LEVEL` | `info` | one of `debug`, `info`, `warn`, `error` | `requiredEnv` throws in both Node services |
 
 #### Ports
 
 | Variable | Default | Meaning | If missing or wrong |
 |---|---|---|---|
-| `EDGE_API_PORT` | `11434` | api-server, loopback only | `start.sh` aborts if the port is taken |
+| `EDGE_API_PORT` | `11434` | api-server, loopback only | `scripts/backend.sh` aborts if the port is taken |
 | `EDGE_SHELL_PORT` | `3000` | shell-app, all interfaces | same |
 | `EDGE_STATUS_DASHBOARD_PORT` | `3001` | dashboard | same |
 | `EDGE_MEETING_MFE_PORT` | `5001` | meeting-summary static server | same |
@@ -1790,8 +1790,8 @@ is not in `.env.example`.
 
 #### Inference defaults
 
-Read by the worker from the environment (`inference-worker/main.cpp:66-77`), each overridable by a
-command-line flag that `start.sh` doesn't pass.
+Read by the worker from the environment (`backend/inference-worker/main.cpp:66-77`), each overridable by a
+command-line flag that `scripts/backend.sh` doesn't pass.
 
 | Variable | Default | Meaning | If missing or wrong |
 |---|---|---|---|
@@ -1879,8 +1879,8 @@ flowchart TB
         P2["Document Q&A page"]
     end
     subgraph static["Static servers"]
-        S1["mfes/meeting-summary/server.js :5001"]
-        S2["mfes/document-qa/server.js :5002"]
+        S1["clients/meeting-summary/server.js :5001"]
+        S2["clients/document-qa/server.js :5002"]
     end
     SHELL["shell-app :3000<br/>origin allowlist"]
     API["api-server :11434<br/>bound to 127.0.0.1"]
@@ -1903,10 +1903,10 @@ flowchart TB
 Three separate mechanisms, and all three have to hold.
 
 **The api-server binds loopback only.** `app.listen(port, '127.0.0.1')` at
-`api-server/server.js:166`.
+`backend/api-server/server.js:166`.
 
 **The MFEs are never told where it is.** `/config.js` hands them `shellApiBase` and the retry
-policy, and nothing else (`mfes/document-qa/server.js:32-40`):
+policy, and nothing else (`clients/document-qa/server.js:32-40`):
 
 ```js
 window.MFE_CONFIG = {"shellApiBase":"http://127.0.0.1:3000","retry":{"attempts":3,"baseMs":500,"maxMs":8000}};
@@ -1916,7 +1916,7 @@ Injecting it at runtime rather than baking it into the HTML means a port change 
 rebuild.
 
 **The shell enforces an origin allowlist.** `EDGE_ALLOWED_MFE_ORIGINS` is split on commas into a
-`Set` at boot (`shell-app/server.js:32-37`) and checked per request. An origin that isn't on the
+`Set` at boot (`backend/shell-app/server.js:32-37`) and checked per request. An origin that isn't on the
 list gets no CORS headers, and the browser drops the response. A new MFE port that isn't added to
 that variable fails silently, with a CORS error in the browser console and nothing at all in the
 shell's log.
@@ -1925,7 +1925,7 @@ shell's log.
 
 `public/retry.js` is byte-identical in both apps. One attempt is one `EventSource` lifecycle,
 resolving on `done` and rejecting with the shell's error payload attached
-(`mfes/document-qa/public/app.js:95-162`).
+(`clients/document-qa/public/app.js:95-162`).
 
 ```mermaid
 stateDiagram-v2
@@ -1944,14 +1944,14 @@ stateDiagram-v2
 ```
 
 Retryable means `payload.retryable === true`, or the error code is in this set
-(`mfes/document-qa/public/retry.js:16-22`):
+(`clients/document-qa/public/retry.js:16-22`):
 
 ```
 worker_crashed, no_ready_workers, queue_timeout, exec_timeout, scheduler_overloaded
 ```
 
 Backoff takes the server's hint when there is one, otherwise exponential with jitter
-(`mfes/document-qa/public/retry.js:30-39`):
+(`clients/document-qa/public/retry.js:30-39`):
 
 ```js
 if (hintSeconds > 0) return Math.min(hintSeconds * 1000, RETRY.maxMs);
@@ -1965,11 +1965,11 @@ The jitter is there so two MFEs knocked back by the same worker crash don't retu
 **Retries reuse the same `requestId` on purpose.** That's what makes the api-server's idempotency
 cache useful: a retry that races a late success replays the cached answer instead of paying for a
 second inference run. Both apps drop the partial answer the failed attempt left on screen before
-retrying (`mfes/meeting-summary/public/app.js:175-178`).
+retrying (`clients/meeting-summary/public/app.js:175-178`).
 
 Cancelling breaks the retry loop rather than waiting out the backoff. The app adds the id to a
 `cancelledRequests` set and `withRetry` checks it both before and after the sleep
-(`mfes/document-qa/public/retry.js:54-67`).
+(`clients/document-qa/public/retry.js:54-67`).
 
 ### What each app exercises
 
@@ -2020,7 +2020,7 @@ make restart  # identical to run
 flowchart LR
     RUN["make run"] --> STOP["scripts/stop.sh"]
     STOP --> BUILD["scripts/build.sh"]
-    BUILD --> START["scripts/start.sh"]
+    BUILD --> START["scripts/backend.sh"]
     BUILD --> C1["cmake -S . -B build -DCMAKE_BUILD_TYPE=Release"]
     BUILD --> C2["cmake --build build -j nproc"]
     BUILD --> C3["npm install in api-server/"]
@@ -2037,10 +2037,10 @@ builtins only, so there's nothing to install for them.
 cmake -S . -B build -DEDGE_ENABLE_LLAMA=OFF && cmake --build build -j"$(nproc)"
 ```
 
-`llama.h` is behind an `#if defined(EDGE_USE_LLAMA)` guard (`inference-worker/inferEngine.cpp:3-5`),
+`llama.h` is behind an `#if defined(EDGE_USE_LLAMA)` guard (`backend/inference-worker/inferEngine.cpp:3-5`),
 so the tree builds with no vendored backend. Without that define, `InferEngine::generate()` returns
-the literal string `"Inference response: <prompt>"` (`inference-worker/inferEngine.cpp:228-233`). No
-model file is needed for the C++ build, though `scripts/start.sh:156-159` still checks one exists.
+the literal string `"Inference response: <prompt>"` (`backend/inference-worker/inferEngine.cpp:228-233`). No
+model file is needed for the C++ build, though `scripts/backend.sh` still checks one exists.
 
 Real backend on CPU only:
 
@@ -2049,8 +2049,8 @@ cmake -S . -B build -DEDGE_ENABLE_CUDA=OFF && cmake --build build -j"$(nproc)"
 ```
 
 `EDGE_ENABLE_LLAMA` and `EDGE_ENABLE_CUDA` are both `ON` by default
-(`inference-worker/CMakeLists.txt:3-4`). A missing `llama-src/CMakeLists.txt` produces a warning and
-a mock-backend build rather than a hard failure (`inference-worker/CMakeLists.txt:50-52`).
+(`backend/inference-worker/CMakeLists.txt:3-4`). A missing `llama-src/CMakeLists.txt` produces a warning and
+a mock-backend build rather than a hard failure (`backend/inference-worker/CMakeLists.txt:50-52`).
 
 ### Running one service on its own
 
@@ -2058,7 +2058,7 @@ Node services read config from the environment only, so load it first:
 
 ```bash
 set -a && source .env.example && source .env && set +a
-node shell-app/server.js
+node backend/shell-app/server.js
 ```
 
 Without that, the process throws on the first `requiredEnv` call it reaches.
@@ -2119,11 +2119,11 @@ In the browser: Document Q&A on `:5002`, press "Burst LOW x5" to see queue posit
 Meeting Summariser on `:5001` for streaming. Status dashboard on `:3001` for the process table.
 
 The cheap wins for automated coverage are the pure functions: scheduler priority and aging
-(`shell-app/scheduler.js:196-205`), the circuit breaker (`supervisor/supervisor.cpp:50-76`), the
-worker's regex JSON parsing (`inference-worker/worker.cpp:22-67`), the device ladder's selection and
-quarantine logic (`inference-worker/deviceLadder.cpp:92-153`), the request registry
-(`api-server/requestRegistry.js`), the env parser (`config/env.js:10-28`), and the browser retry
-helper (`mfes/document-qa/public/retry.js`). None of them needs a running model.
+(`backend/shell-app/scheduler.js:196-205`), the circuit breaker (`backend/supervisor/supervisor.cpp:50-76`), the
+worker's regex JSON parsing (`backend/inference-worker/worker.cpp:22-67`), the device ladder's selection and
+quarantine logic (`backend/inference-worker/deviceLadder.cpp:92-153`), the request registry
+(`backend/api-server/requestRegistry.js`), the env parser (`backend/config/env.js:10-28`), and the browser retry
+helper (`clients/document-qa/public/retry.js`). None of them needs a running model.
 
 ---
 
@@ -2141,7 +2141,7 @@ objects, which otherwise break the next boot on their own.
 
 ### `Missing required environment variable: EDGE_SOMETHING`
 
-Thrown by `config/env.js:61`. Either you added a variable to `.env` but not `.env.example`, or
+Thrown by `backend/config/env.js:61`. Either you added a variable to `.env` but not `.env.example`, or
 you're running a Node service by hand without sourcing the env files. Both fixes are in section 13.
 
 ### `[supervisor] model cache ready flag was not observed`
@@ -2153,7 +2153,7 @@ the deadline. Check the supervisor's stderr for the model-cache's own error, the
 
 ### `[worker] shared memory size mismatch: mapped=X metadata=Y`
 
-`inference-worker/worker.cpp:217-218`. A shared-memory object left behind by a previous run with a
+`backend/inference-worker/worker.cpp:217-218`. A shared-memory object left behind by a previous run with a
 different model. `make stop` removes both objects, or do it by hand:
 
 ```bash
@@ -2168,7 +2168,7 @@ Every worker is `starting`, `busy` or `crashed`. Check which:
 curl -s http://127.0.0.1:11434/health | python3 -m json.tool
 ```
 
-`starting` right after boot is normal, because `start.sh` sleeps only two seconds before bringing up
+`starting` right after boot is normal, because `scripts/backend.sh` sleeps only two seconds before bringing up
 the shell. If workers stay `starting`, their sockets never appeared, so check the supervisor stderr
 for worker init failures. If `EDGE_MAX_SLOTS` is larger than `EDGE_WORKER_COUNT`, the shell is
 admitting more work than the pool can hold and this 503 is the expected outcome.
@@ -2225,7 +2225,7 @@ slower on tokens per second, so set the bound for the slowest tier in `EDGE_DEVI
 
 Tune `EDGE_TEMPERATURE` and `EDGE_MAX_TOKENS`, and check the prompt style suits the model. The
 worker reports `[error: empty model output]` as a `kRuntimeError` fault, which will quarantine the
-tier if it keeps happening (`inference-worker/inferEngine.cpp:223-226`).
+tier if it keeps happening (`backend/inference-worker/inferEngine.cpp:223-226`).
 
 ### `502 worker_unavailable` with a JSON parse message
 
@@ -2235,8 +2235,11 @@ character survived the hand-rolled `jsonEscape`. See section 12.
 ### CMake warns about a missing LICENSE
 
 ```
-License file .../inference-worker/llama-src/LICENSE not found
+License file .../backend/inference-worker/llama-src/LICENSE not found
 ```
 
-Expected and harmless. It comes from the vendored source layout. `inference-worker/llama-src/` is an
-upstream tree, so don't edit or reformat it.
+The licence file has gone missing from the vendored tree. Restore it from the llama.cpp
+repository rather than ignoring the warning: upstream's build reads it
+(`llama-src/CMakeLists.txt:186`), and MIT requires the notice to ship with any
+redistribution of the source. `backend/inference-worker/llama-src/` is otherwise an
+unmodified upstream tree, so don't edit or reformat it.

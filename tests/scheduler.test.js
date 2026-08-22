@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { Scheduler } = require('../shell-app/scheduler');
+const { Scheduler } = require('../backend/shell-app/scheduler');
 const { deferred, sleep, waitFor, abortableJob } = require('./support');
 
 // Fast timers everywhere. The defaults are measured in seconds and minutes,

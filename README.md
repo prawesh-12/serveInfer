@@ -5,8 +5,8 @@ This repository provides an on-device, multi-process inference runtime, especial
 - **C++ control plane**: `supervisor`, `model-cache`, `inference-worker`
 - **Node.js API plane**: `api-server` (worker-pool + HTTP/SSE)
 - **Node.js shell plane**: `shell-app` (scheduler + singleton API facade)
-- **Independent MFE plane**: `mfes/meeting-summary` and `mfes/document-qa`
-- **System dashboard plane**: `system-dashboard` (runtime/process status UI)
+- **Independent MFE plane**: `clients/meeting-summary` and `clients/document-qa`
+- **System dashboard plane**: `dashboard` (runtime/process status UI)
 
 It exposes local inference APIs and serves two browser UIs:
 
@@ -19,46 +19,57 @@ It exposes local inference APIs and serves two browser UIs:
 
 ```text
 server_infer/
-├── CMakeLists.txt               # Root CMake entrypoint for C++ targets
-├── Makefile                     # Convenience commands (run/build/start/stop/restart)
-├── .env.example                 
-├── api-server/                  # Node.js API service exposed to clients
-│   ├── server.js                # Express bootstrap + health route + supervisor notify listener
-│   ├── ipc.js                   # WorkerPool (worker socket management + request dispatch)
-│   ├── routes/infer.js          # /infer and /infer/stream route handlers
-│   └── package.json             # API server dependencies/scripts
-├── inference-worker/            # C++ inference worker process
-│   ├── main.cpp                 # Worker entrypoint + env parsing + socket server startup
-│   ├── worker.h                 # Worker interface and request/response contracts
-│   ├── worker.cpp               # Worker socket loop + request handling
-│   ├── inferEngine.h            # Inference engine interface
-│   ├── inferEngine.cpp          # llama-backed generation + streaming implementation
-│   ├── CMakeLists.txt           # Worker build config (llama integration flags)
-│   └── llama-src/               # Vendored llama.cpp source tree (thin-wrapper approach)
-├── model-cache/                 # C++ model cache process (shared memory owner)
-│   ├── main.cpp                 # Model-cache entrypoint
-│   ├── model_cache.h            # Shared model header/cache API
-│   └── model_cache.cpp          # GGUF load + checksum + /dev/shm management
-├── supervisor/                  # C++ process supervisor for runtime children
-│   ├── main.cpp                 # Supervisor CLI + startup wiring
-│   ├── supervisor.h             # Supervisor class/process model definitions
-│   └── supervisor.cpp           # Spawn/monitor/restart logic + crash notifications
-├── shell-app/                   # Node.js shell singleton + scheduler
-│   ├── server.js                # Shell routes (/api/* + shell dashboard)
-│   ├── scheduler.js             # Priority queue + fairness + timeout/cancel handling
-│   ├── edgeAgentService.js      # Adapter between scheduler and api-server
-│   └── package.json             # Shell app dependencies/scripts
-├── system-dashboard/            # Independent system status dashboard, default port 3001
-│   ├── server.js                # Process/API status collector + static server
-│   └── public/                  # Dashboard HTML/CSS/JS
-├── mfes/
-│   ├── meeting-summary/         # Independent MFE, default port 5001
-│   └── document-qa/             # Independent MFE, default port 5002
-├── ipc/paths.h                  # Shared IPC paths/constants for C++ services
+├── Makefile                     # build, and start/stop each tier on its own
+├── .env.example                 # one config file, read by all three tiers
+│
+├── backend/                     # the inference runtime. Nothing here serves a browser.
+│   ├── CMakeLists.txt           # C++ entrypoint for the three native targets
+│   ├── supervisor/              # C++ process supervisor
+│   │   ├── main.cpp             # CLI and startup wiring
+│   │   ├── supervisor.h
+│   │   └── supervisor.cpp       # spawn, monitor, restart, crash notifications
+│   ├── model-cache/             # C++ owner of the shared GGUF in /dev/shm
+│   │   ├── main.cpp
+│   │   ├── model_cache.h
+│   │   └── model_cache.cpp      # GGUF load, checksum, shm management
+│   ├── inference-worker/        # C++ worker, one per pool slot
+│   │   ├── main.cpp
+│   │   ├── worker.h / worker.cpp        # socket loop and request handling
+│   │   ├── inferEngine.h / .cpp         # llama-backed generation and streaming
+│   │   ├── deviceLadder.h / .cpp        # tier policy: escalate, quarantine, health gate
+│   │   ├── deviceBackends.h / .cpp      # per-tier probes and vendor error codes
+│   │   ├── tests/               # C++ unit tests
+│   │   └── llama-src/           # vendored llama.cpp, do not edit
+│   ├── api-server/              # Node agent, binds 127.0.0.1 only
+│   │   ├── server.js            # bootstrap, /health, supervisor notify listener
+│   │   ├── ipc.js               # WorkerPool: sockets, dispatch, crash recovery
+│   │   ├── requestRegistry.js   # in-flight tracking and idempotent replay
+│   │   └── routes/infer.js      # /infer and /infer/stream
+│   ├── shell-app/               # Node singleton, the public API boundary
+│   │   ├── server.js            # /api/* routes and SSE re-emission
+│   │   ├── scheduler.js         # priority queue, fairness, timeouts, cancel
+│   │   └── edgeAgentService.js  # adapter between scheduler and api-server
+│   ├── ipc/paths.h              # shared IPC paths for the C++ services
+│   ├── config/env.js            # env loader, throws on anything missing
+│   └── models/                  # the GGUF lives here, gitignored
+│
+├── clients/                     # sample user apps. HTTP clients of the shell API.
+│   ├── meeting-summary/         # default port 5001
+│   └── document-qa/             # default port 5002
+│
+├── dashboard/                   # operator status page, default port 3001
+│   ├── server.js                # reads the pidfile registry and two health endpoints
+│   └── public/
+│
+├── docs/                        # architecture and design notes
+├── tests/                       # Node unit tests
 └── scripts/
-    ├── build.sh                 # Build C++ binaries + install Node dependencies
-    ├── start.sh                 # Start supervisor and shell-app with env wiring
-    └── stop.sh                  # Stop runtime processes and clean IPC artifacts
+    ├── lib.sh                   # shared helpers and the pidfile registry
+    ├── build.sh                 # compile C++ and install backend node deps
+    ├── backend.sh               # start|stop the runtime
+    ├── clients.sh               # start|stop the sample apps
+    ├── dashboard.sh             # start|stop the status page
+    └── stop.sh                  # stop all three
 ```
 
 ---
@@ -72,7 +83,7 @@ server_infer/
 3. **`edge-inference-worker` x N** runs inference over Unix sockets.
 4. **`api-server`** exposes `/infer` and `/infer/stream`.
 5. **`shell-app`** exposes the singleton scheduler-backed app API.
-6. **`system-dashboard`** exposes runtime/process/API status UI.
+6. **`dashboard`** exposes runtime/process/API status UI.
 7. **Independent MFEs** run on their own ports and call only the shell singleton.
 
 ### IPC and shared resources
@@ -83,9 +94,9 @@ server_infer/
 - Shared memory name: `EDGE_SHM_NAME`
 - Crash log: `EDGE_CRASH_LOG`
 - Model config snapshot: `EDGE_MODEL_CONFIG_PATH`
-- Last request snapshot: `EDGE_LAST_REQUEST_PATH`
+- Open-request registry: `EDGE_INFLIGHT_PATH` (what was in flight, readable after a crash)
 
-Runtime paths are centralized in `.env.example` and read by `ipc/paths.h`.
+Runtime paths are centralized in `.env.example` and read by `backend/ipc/paths.h`.
 
 ---
 
@@ -110,22 +121,34 @@ The worker uses a **thin inference wrapper (`InferEngine`)** over vendored llama
 
 This means worker restarts do not reopen the original model path from disk; they attach to the model-cache-owned shared GGUF object.
 
-Qualcomm NPU and Apple ANE fallback branches are intentionally not implemented in this Linux build.
+Qualcomm NPU and Apple ANE **backends** are not implemented in this Linux build, because the
+hardware is not present. The fallback **mechanism** they need is implemented and running:
+a configurable device ladder with per-tier quarantine, a health-check gate before a faulted
+tier is allowed back, and `device_removed` treated as unrecoverable for the session. See
+[docs/device-fallback.md](docs/device-fallback.md) for the decision trees and the escalation
+order, and [docs/scheduler.md](docs/scheduler.md) for the queueing model.
 
 ---
 
 ## 4) Scheduler behavior (shell-app)
 
-The shell scheduler (`shell-app/scheduler.js`) enforces:
+The shell scheduler (`backend/shell-app/scheduler.js`) enforces:
 
-- Global max concurrent slots (`maxSlots`, default `EDGE_WORKER_COUNT`, usually 2)
-- Per-MFE (Micro-Frontends) concurrent cap (`maxPerMfe`, default 2)
+- Global max concurrent slots (`EDGE_MAX_SLOTS`, shipped as 4)
+- Per-MFE concurrent cap (`EDGE_MAX_PER_MFE`, shipped as 2). It must be strictly less than
+  `EDGE_MAX_SLOTS` or the fairness rule does nothing, because one MFE could then hold
+  every slot
 - Priority queue: `high`, `normal`, `low`
-- Aging boost every `agingMs` (default 15s)
-- Queue cap (`maxQueue`, default 20)
-- Queue timeout (`queueTimeoutMs`, default 30s)
+- Aging boost every `EDGE_AGING_MS` (15s)
+- Queue cap (`EDGE_MAX_QUEUE`, 20), over which enqueue returns 429
+- Queue-wait timeout (`EDGE_QUEUE_TIMEOUT_MS`, 30s) -> 408, `phase: "queue"`
+- Execution timeout (`EDGE_EXEC_TIMEOUT_MS`, 120s) -> 504, `phase: "execution"`. It aborts
+  the job and releases its slot without waiting for the job to settle
 - Cancellation support for queued and active requests
 - Queue position + estimated wait reporting
+
+`EDGE_MAX_SLOTS` must not exceed `EDGE_WORKER_COUNT` (also 4), or the shell admits work the
+agent then rejects with `no_ready_workers`.
 
 ---
 
@@ -152,29 +175,41 @@ Response:
     "requestId": "id",
     "result": "generated text",
     "device": "cuda|cpu",
-    "degraded": false
+    "degraded": false,
+    "degradedReason": null,
+    "replay": false
 }
 ```
+
+`degradedReason` names the tier and the fault that caused a fallback, for example
+`cuda:device_removed`. It is null when `degraded` is false. `replay` is true when this
+`requestId` was already answered and the cached result came back instead of a second
+inference run.
 
 Headers:
 
 - `X-Inference-Device`
 - `X-Inference-Degraded`
 - `X-Latency-Mode`
+- `X-Degraded-Reason` (only when degraded)
+- `X-Idempotent-Replay`
+- `Retry-After` on a 503
 
 ### `GET /infer/stream`
 
 Query: `prompt`, `requestId`, `mfeId`
 
-Server-Sent Events:
+Server-Sent Events. The api-server emits three, and only three:
 
-- `queued`
-- `started`
-- `cancelled`
-- `timeout`
 - `token`
 - `done`
 - `error`
+
+`queued`, `started`, `cancelled` and `timeout` are **shell-only** events. The shell parses
+the api-server's stream by hand and re-emits its own, adding those four from its scheduler.
+A client talking to the api-server directly will never see them. Replaying a finished
+`requestId` returns one `done` with `replay: true` and no tokens, because tokens cannot be
+re-sent. Replaying one that is still live returns 409 `request_in_flight`.
 
 ### `GET /health`
 
@@ -203,35 +238,38 @@ Defaults live in `.env.example`; `.env` can override them locally. The Node serv
 
 ```env
 EDGE_STATE_DIR=/tmp/edge-runtime
-EDGE_WORKER_COUNT=2
-EDGE_MODEL_PATH=./models/Phi-3-mini-4k-instruct-q4.gguf
+EDGE_WORKER_COUNT=4
+EDGE_MODEL_PATH=./backend/models/Phi-3-mini-4k-instruct-q4.gguf
 EDGE_FORCE_CPU=0
 EDGE_LOG_LEVEL=info
 
+# Ports
 EDGE_API_PORT=11434
 EDGE_SHELL_PORT=3000
 EDGE_STATUS_DASHBOARD_PORT=3001
 EDGE_MEETING_MFE_PORT=5001
 EDGE_DOC_QA_MFE_PORT=5002
 
+# Public/internal service URLs
 EDGE_API_BASE=http://127.0.0.1:11434
 EDGE_SHELL_PUBLIC_BASE=http://127.0.0.1:3000
-EDGE_MEETING_MFE_URL=http://127.0.0.1:5001
-EDGE_DOC_QA_MFE_URL=http://127.0.0.1:5002
 EDGE_ALLOWED_MFE_ORIGINS=http://127.0.0.1:5001,http://localhost:5001,http://127.0.0.1:5002,http://localhost:5002
 
+# Inference defaults
 EDGE_MAX_TOKENS=512
 EDGE_TEMPERATURE=0.8
 EDGE_GPU_LAYERS=99
 EDGE_SEED=42
 
-EDGE_MAX_SLOTS=2
+# Scheduler limits
+EDGE_MAX_SLOTS=4
 EDGE_MAX_PER_MFE=2
 EDGE_MAX_QUEUE=20
 EDGE_AGING_MS=15000
 EDGE_QUEUE_TIMEOUT_MS=30000
 EDGE_DEFAULT_JOB_MS=8000
 
+# IPC and runtime files
 EDGE_SHM_NAME=/edge-model-weights
 EDGE_SUPERVISOR_SOCK=/tmp/edge-supervisor.sock
 EDGE_WORKER_SOCKET_PREFIX=/tmp/edge-worker-
@@ -239,7 +277,42 @@ EDGE_WORKER_CONNECT_TIMEOUT_MS=3000
 EDGE_API_NOTIFY_SOCK=/tmp/edge-api-notify.sock
 EDGE_CRASH_LOG=/tmp/edge-crash.log
 EDGE_MODEL_CONFIG_PATH=/tmp/edge-model-config.json
-EDGE_LAST_REQUEST_PATH=/tmp/edge-last-request.json
+
+# Execution bounds (a running job, not just a queued one)
+EDGE_EXEC_TIMEOUT_MS=120000
+EDGE_DONE_TTL_MS=300000
+EDGE_DONE_MAX_ENTRIES=500
+
+# Worker recovery after a crash: probe the socket instead of trusting a timer
+EDGE_WORKER_RECOVERY_MS=2000
+EDGE_WORKER_RECOVERY_ATTEMPTS=10
+
+# Replay safety
+EDGE_IDEMPOTENCY_TTL_MS=300000
+EDGE_INFLIGHT_PATH=/tmp/edge-inflight.json
+
+# Client retry policy, injected into each MFE through /config.js
+EDGE_CLIENT_RETRY_ATTEMPTS=3
+EDGE_CLIENT_RETRY_BASE_MS=500
+EDGE_CLIENT_RETRY_MAX_MS=8000
+
+# Device fallback ladder (A3/A4). Comma-separated, highest tier first.
+# Tier names this build understands: cpu cuda rocm vulkan npu directml gpu ane
+# metal accelerate remote. A tier for another OS probes as wrong_platform and is
+# skipped, so a Windows ladder (npu,directml,cpu) is safe to leave in place here.
+EDGE_DEVICE_LADDER=cuda,cpu
+EDGE_DEVICE_QUARANTINE_MS=60000
+EDGE_DEVICE_PROBE_INTERVAL_MS=5000
+
+# The remote tier sends prompts off the device, so it needs an endpoint AND an
+# explicit opt-in. Both unset means the tier probes as runtime_missing and is
+# skipped. Endpoint set without the opt-in probes as policy_disabled.
+EDGE_REMOTE_ENDPOINT=
+EDGE_REMOTE_FALLBACK_ALLOWED=0
+
+# Exercises the fallback path without the hardware: removed | unsupported | runtime.
+# Empty means no injection, which costs one getenv per generate call.
+EDGE_SIMULATE_DEVICE_FAULT=
 ```
 
 When changing ports, update the matching URL variables and `EDGE_ALLOWED_MFE_ORIGINS` as well.
@@ -277,7 +350,7 @@ pip3 install -U huggingface-hub
 ```bash
 hf download microsoft/Phi-3-mini-4k-instruct-gguf \
   Phi-3-mini-4k-instruct-q4.gguf \
-  --local-dir ./models
+  --local-dir ./backend/models
 ```
 
 ## 7.3 Build + run
@@ -290,8 +363,16 @@ Other commands:
 
 ```bash
 make build
-make start
-make stop
+
+make backend        # the runtime
+make clients        # the sample apps
+make dashboard      # the operator status page
+
+make backend-stop   # each tier stops on its own
+make clients-stop
+make dashboard-stop
+
+make stop           # all three
 make restart
 ```
 
@@ -299,12 +380,42 @@ make restart
 
 ## 8) Process lifecycle and reliability
 
-- `make run` does: stop -> build -> start
-- `start.sh` fails fast if API/shell ports are occupied
+### Lifecycle class of every process
+
+| Process | Class | Count | Who owns it | Restart policy |
+|---|---|---|---|---|
+| `edge-supervisor` | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not restarted; killing it leaves the shell and MFEs running |
+| `edge-model-cache` | **persistent** | 1 | supervisor | restarted on crash, behind the breaker; workers restart after it |
+| `api-server` (node) | **persistent** | 1 | supervisor | restarted on crash, behind the breaker |
+| `edge-inference-worker` | **pooled** | `EDGE_WORKER_COUNT` | supervisor | fixed-size pool, each slot restarted on crash behind the breaker |
+| `shell-app` (node) | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not supervised |
+| `dashboard` (node) | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not supervised |
+| MFE static servers | **persistent** | 2 | `scripts/backend.sh` (background job, pidfile) | not supervised |
+
+Nothing here is **on-demand**: no process is spawned per request. Workers are
+pre-forked into a fixed pool precisely so a request never pays model load time.
+
+### Mechanics
+
+- `make run` does: stop, build, then start all three tiers
+- `scripts/backend.sh` fails fast if API/shell ports are occupied
 - `stop.sh` stops pidfile processes + scans and kills leftover runtime processes
 - Supervisor monitors child exits and restarts workers
-- Circuit breaker prevents infinite restart storms after repeated crashes
-- API worker-pool tracks worker states (`starting`, `ready`, `busy`, `crashed`)
+- Circuit breaker opens after `3` crashes in `60s` (`backend/supervisor/supervisor.h`), and the
+  count is also read back from `EDGE_CRASH_LOG`, so it survives a supervisor restart
+- API worker-pool tracks worker states (`starting`, `ready`, `busy`, `crashed`). A crashed
+  worker returns to the pool only when a probe connects to its socket, so a restart the
+  breaker suppressed never gets handed a request
+- Open requests are written to `EDGE_INFLIGHT_PATH`; on boot the api-server reports what
+  the previous process left in flight under `/health` -> `requests.orphanedFromPreviousRun`
+
+### Platform assumption
+
+The assignment describes a **Windows access violation**. This build is POSIX-only:
+`fork`/`execvp`, `AF_UNIX` sockets, POSIX shared memory. A crash reason is recorded as
+`signal_<n>` (for example `signal_11` for a segfault), which is the Linux analogue of the
+access violation in the brief. The recovery contract is the same; only the fault code and
+the process API differ.
 
 ---
 
@@ -327,8 +438,8 @@ curl -N "$EDGE_API_BASE/infer/stream?prompt=Summarize+AI+in+3+points&requestId=s
 ### Open UI
 
 - System dashboard: `http://127.0.0.1:$EDGE_STATUS_DASHBOARD_PORT`
-- Meeting Summariser MFE: `$EDGE_MEETING_MFE_URL`
-- Document Q&A MFE: `$EDGE_DOC_QA_MFE_URL`
+- Meeting Summariser: `http://127.0.0.1:$EDGE_MEETING_MFE_PORT`
+- Document Q&A: `http://127.0.0.1:$EDGE_DOC_QA_MFE_PORT`
 
 ---
 
@@ -338,7 +449,7 @@ curl -N "$EDGE_API_BASE/infer/stream?prompt=Summarize+AI+in+3+points&requestId=s
 
 - Workers are still loading model or unavailable.
 - Wait a few seconds and retry.
-- Check `make start` logs for worker initialization.
+- Check `$EDGE_STATE_DIR/backend-*.log` for worker initialization.
 
 ### `worker_crashed`
 
@@ -379,12 +490,14 @@ curl -N "$EDGE_API_BASE/infer/stream?prompt=Summarize+AI+in+3+points&requestId=s
 
 ---
 
-## 12) Known warning
+## 12) Vendored llama.cpp
 
-During CMake configure of vendored llama-src, you may see:
+`backend/inference-worker/llama-src/` is an unmodified copy of llama.cpp, used through the
+thin `InferEngine` wrapper. Don't edit or reformat it.
 
-`License file .../inference-worker/llama-src/LICENSE not found`
-
-This is a build-time warning from vendored source layout and does not block build/run.
+It ships with its MIT licence at `llama-src/LICENSE`, which upstream's own build expects
+(`CMakeLists.txt:186`) and which MIT requires to travel with the source. If CMake warns
+that the licence file is not found, the file has gone missing and needs restoring from
+the upstream repository, not ignoring.
 
 ---
