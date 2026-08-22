@@ -1,7 +1,6 @@
 #pragma once
 
-// A tiny test harness with no dependencies. Each case registers itself when the
-// program starts, and main() runs them all.
+// A tiny dependency-free harness. Each case registers itself at startup.
 //
 //   EDGE_TEST(some_id, "plain language description of the behaviour") {
 //     CHECK(condition);

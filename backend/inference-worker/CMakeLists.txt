@@ -10,7 +10,12 @@ add_executable(edge-inference-worker
   worker.cpp
   deviceLadder.cpp
   deviceBackends.cpp
+  inferenceBackend.cpp
+  backendRouter.cpp
   inferEngine.cpp
+  gpuResourceOwner.cpp
+  hardwareProbe.cpp
+  ../hardware/hardwareReport.cpp
 )
 
 target_include_directories(edge-inference-worker
@@ -22,8 +27,17 @@ target_include_directories(edge-inference-worker
 target_link_libraries(edge-inference-worker PRIVATE Threads::Threads rt)
 
 if(EDGE_ENABLE_LLAMA)
+  # Vendored llama.cpp, pinned to upstream commit e85caa81ea2b65797396018c179b87ad61fa38ab
+  # (ggml 0.21.0). Synchronized from the reference tree; see docs/build-matrix.md.
+  # This is the ONE authoritative llama.cpp source tree for this project.
   set(EDGE_LLAMA_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama-src")
   if(EXISTS "${EDGE_LLAMA_SRC_DIR}/CMakeLists.txt")
+    # llama-src has no .git of its own, so upstream's build-info.cmake would walk up
+    # and stamp the binary with THIS repo's commit. Pin the real vendored upstream
+    # identity instead, so `llama_print_system_info` does not lie about its version.
+    set(LLAMA_BUILD_COMMIT "e85caa81")
+    set(LLAMA_BUILD_NUMBER 10582)
+
     set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
@@ -31,6 +45,9 @@ if(EDGE_ENABLE_LLAMA)
     set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_UI OFF CACHE BOOL "" FORCE)
     set(LLAMA_USE_PREBUILT_UI OFF CACHE BOOL "" FORCE)
+    # These two guard app/ and tools/mtmd/, which are deliberately not vendored.
+    set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_MTMD OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     if(EDGE_ENABLE_CUDA)
       set(GGML_CUDA ON CACHE BOOL "" FORCE)

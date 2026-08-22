@@ -61,6 +61,7 @@ server_infer/
 │   ├── server.js                # reads the pidfile registry and two health endpoints
 │   └── public/
 │
+├── logs/                        # one <name>.log per process, gitignored
 ├── docs/                        # architecture and design notes
 ├── tests/                       # Node unit tests
 └── scripts/
@@ -92,6 +93,7 @@ server_infer/
 - API notify socket: `EDGE_API_NOTIFY_SOCK`
 - Worker sockets: `EDGE_WORKER_SOCKET_PREFIX` plus worker id
 - Shared memory name: `EDGE_SHM_NAME`
+- Process logs: `EDGE_LOG_DIR`, one `<name>.log` per process (`logs/` by default)
 - Crash log: `EDGE_CRASH_LOG`
 - Model config snapshot: `EDGE_MODEL_CONFIG_PATH`
 - Open-request registry: `EDGE_INFLIGHT_PATH` (what was in flight, readable after a crash)
@@ -126,7 +128,8 @@ hardware is not present. The fallback **mechanism** they need is implemented and
 a configurable device ladder with per-tier quarantine, a health-check gate before a faulted
 tier is allowed back, and `device_removed` treated as unrecoverable for the session. See
 [docs/device-fallback.md](docs/device-fallback.md) for the decision trees and the escalation
-order, and [docs/scheduler.md](docs/scheduler.md) for the queueing model.
+order, [docs/build-matrix.md](docs/build-matrix.md) for which backends a given build can
+actually contain, and [docs/scheduler.md](docs/scheduler.md) for the queueing model.
 
 ---
 
@@ -238,6 +241,7 @@ Defaults live in `.env.example`; `.env` can override them locally. The Node serv
 
 ```env
 EDGE_STATE_DIR=/tmp/edge-runtime
+EDGE_LOG_DIR=./logs
 EDGE_WORKER_COUNT=4
 EDGE_MODEL_PATH=./backend/models/Phi-3-mini-4k-instruct-q4.gguf
 EDGE_FORCE_CPU=0
@@ -275,7 +279,7 @@ EDGE_SUPERVISOR_SOCK=/tmp/edge-supervisor.sock
 EDGE_WORKER_SOCKET_PREFIX=/tmp/edge-worker-
 EDGE_WORKER_CONNECT_TIMEOUT_MS=3000
 EDGE_API_NOTIFY_SOCK=/tmp/edge-api-notify.sock
-EDGE_CRASH_LOG=/tmp/edge-crash.log
+EDGE_CRASH_LOG=./logs/edge-crash.log
 EDGE_MODEL_CONFIG_PATH=/tmp/edge-model-config.json
 
 # Execution bounds (a running job, not just a queued one)
@@ -387,10 +391,10 @@ make restart
 | `edge-supervisor` | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not restarted; killing it leaves the shell and MFEs running |
 | `edge-model-cache` | **persistent** | 1 | supervisor | restarted on crash, behind the breaker; workers restart after it |
 | `api-server` (node) | **persistent** | 1 | supervisor | restarted on crash, behind the breaker |
-| `edge-inference-worker` | **pooled** | `EDGE_WORKER_COUNT` | supervisor | fixed-size pool, each slot restarted on crash behind the breaker |
+| `edge-inference-worker` | **pooled** | `EDGE_WORKER_COUNT`, clamped by `placeableWorkerCount` to what the machine's RAM and VRAM can pay for | supervisor | fixed-size pool, each slot restarted on crash behind the breaker |
 | `shell-app` (node) | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not supervised |
-| `dashboard` (node) | **persistent** | 1 | `scripts/backend.sh` (background job, pidfile) | not supervised |
-| MFE static servers | **persistent** | 2 | `scripts/backend.sh` (background job, pidfile) | not supervised |
+| `dashboard` (node) | **persistent** | 1 | `scripts/dashboard.sh` (background job, pidfile) | not supervised |
+| MFE static servers | **persistent** | 2 | `scripts/clients.sh` (background job, pidfile) | not supervised |
 
 Nothing here is **on-demand**: no process is spawned per request. Workers are
 pre-forked into a fixed pool precisely so a request never pays model load time.
@@ -411,11 +415,10 @@ pre-forked into a fixed pool precisely so a request never pays model load time.
 
 ### Platform assumption
 
-The assignment describes a **Windows access violation**. This build is POSIX-only:
-`fork`/`execvp`, `AF_UNIX` sockets, POSIX shared memory. A crash reason is recorded as
-`signal_<n>` (for example `signal_11` for a segfault), which is the Linux analogue of the
-access violation in the brief. The recovery contract is the same; only the fault code and
-the process API differ.
+This build is POSIX-only: `fork`/`execvp`, `AF_UNIX` sockets, POSIX shared memory. A crash
+reason is recorded as `signal_<n>` (for example `signal_11` for a segfault), which is the
+Linux analogue of a **Windows access violation**. The recovery contract is the same; only
+the fault code and the process API differ.
 
 ---
 
@@ -449,7 +452,7 @@ curl -N "$EDGE_API_BASE/infer/stream?prompt=Summarize+AI+in+3+points&requestId=s
 
 - Workers are still loading model or unavailable.
 - Wait a few seconds and retry.
-- Check `$EDGE_STATE_DIR/backend-*.log` for worker initialization.
+- Check `$EDGE_LOG_DIR/backend-*.log` (`logs/` by default) for worker initialization.
 
 ### `worker_crashed`
 

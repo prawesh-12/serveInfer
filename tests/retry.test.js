@@ -7,9 +7,7 @@ const path = require('node:path');
 
 const retryPath = path.join(__dirname, '..', 'clients', 'document-qa', 'public', 'retry.js');
 
-// retry.js is a browser script, not a module. It reads window.MFE_CONFIG once
-// when it loads, and puts its exports on window. So testing a different policy
-// means loading the file again from scratch.
+// A browser script that reads window.MFE_CONFIG once at load, so a new policy needs a fresh load.
 function loadRetry(policy) {
   global.window = { MFE_CONFIG: policy ? { retry: policy } : undefined };
   delete require.cache[require.resolve(retryPath)];

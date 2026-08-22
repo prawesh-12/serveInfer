@@ -9,8 +9,7 @@ const { spawn } = require('node:child_process');
 const { WorkerPool } = require('../backend/api-server/ipc');
 const { sleep, waitFor } = require('./support');
 
-// An AF_UNIX path has to fit in 108 bytes, so these stay in /tmp with short
-// names rather than under a long temp directory.
+// An AF_UNIX path must fit in 108 bytes, so these stay in /tmp with short names.
 let counter = 0;
 const socketPaths = [];
 const pools = [];
@@ -67,8 +66,7 @@ test('probing a worker fails for a stale socket file that nothing is listening o
   const pool = makePool();
   const socketPath = pool.workers.get(0).socketPath;
 
-  // A killed process leaves its socket inode behind. That leftover file is the
-  // exact thing that used to fool the old bare-timer recovery.
+  // A killed process leaves its socket inode behind, which used to fool the bare-timer recovery.
   const child = spawn(
     process.execPath,
     [
@@ -174,9 +172,7 @@ test('a healthy worker whose socket exists is handed out by _acquireWorker', asy
 });
 
 test('a supervisor worker_restarted message re-arms the probe instead of trusting the claim', async () => {
-  // The supervisor has started a replacement, but its socket is not there yet.
-  // Trusting the message alone would hand out a worker that cannot take a
-  // connection.
+  // Trusting the crash message alone would hand out a worker whose socket is not there yet.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   pool._markWorkerCrashed(0, null);
   await waitFor(() => pool.workers.get(0).recoveryAttempt >= 2);
@@ -185,16 +181,13 @@ test('a supervisor worker_restarted message re-arms the probe instead of trustin
   assert.equal(pool.workers.get(0).status, 'crashed', 'still crashed until a probe says otherwise');
   assert.equal(pool.workers.get(0).recoveryAttempt, 1, 'the attempt budget is reset');
 
-  // once something is actually listening, the probe lets it back in
   await listenOn(pool.workers.get(0).socketPath);
   pool.handleSupervisorMessage({ type: 'worker_restarted', workerId: 0 });
   await waitFor(() => pool.workers.get(0).status === 'ready');
 });
 
 test('a worker whose socket file is stale is quarantined after its first failed request', async () => {
-  // _refreshWorkerReadiness marks a worker ready if its socket file exists, and
-  // a leftover file passes that check. The first failed request proves the file
-  // was lying. The worker goes out then, instead of being handed out again.
+  // A leftover socket file passes the readiness check, so the first failed request is what evicts.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   const socketPath = pool.workers.get(0).socketPath;
   fs.writeFileSync(socketPath, '');
@@ -214,7 +207,6 @@ test('isTransportFailure separates a dead socket from a worker that answered wit
   assert.ok(WorkerPool.isTransportFailure('worker_connect_timeout'));
   assert.ok(WorkerPool.isTransportFailure('worker_socket_error'));
   assert.ok(WorkerPool.isTransportFailure('worker_closed'));
-  // these came back over a working socket, so the worker is not the problem
   assert.ok(!WorkerPool.isTransportFailure('worker_error'));
   assert.ok(!WorkerPool.isTransportFailure('worker_bad_json'));
   assert.ok(!WorkerPool.isTransportFailure('no_ready_workers'));

@@ -14,9 +14,6 @@ void InferEngine::recordFault(DeviceFault fault, const std::string& detail) {
   lastFaultDetail_ = detail;
 }
 
-// We cannot cause a real ERROR_DEVICE_REMOVED on this machine. So to try the
-// fallback path, set EDGE_SIMULATE_DEVICE_FAULT to removed, unsupported or
-// runtime. Leave it unset and this returns kNone and costs nothing.
 DeviceFault InferEngine::injectedFault() const {
   const char* raw = std::getenv("EDGE_SIMULATE_DEVICE_FAULT");
   if (raw == nullptr || raw[0] == '\0') {
@@ -34,8 +31,9 @@ DeviceFault InferEngine::injectedFault() const {
   return DeviceFault::kNone;
 }
 
-bool InferEngine::reloadOn(bool forceCpu) {
+void InferEngine::freeModelAndContext() {
 #if defined(EDGE_USE_LLAMA)
+  // Context first: it holds the ggml_backend instances whose teardown frees the CUDA pool.
   if (ctx_ != nullptr) {
     llama_free(static_cast<llama_context*>(ctx_));
     ctx_ = nullptr;
@@ -45,6 +43,20 @@ bool InferEngine::reloadOn(bool forceCpu) {
     model_ = nullptr;
   }
 #endif
+}
+
+bool InferEngine::releaseDeviceResources() {
+  freeModelAndContext();
+  return model_ == nullptr && ctx_ == nullptr;
+}
+
+// Freeing model and context never releases the CUDA primary context; llama.cpp cannot.
+bool InferEngine::deviceResourcesResident() const {
+  return deviceInitialized_;
+}
+
+bool InferEngine::reloadOn(bool forceCpu) {
+  freeModelAndContext();
   cfg_.forceCpu = forceCpu;
   gpuOk_ = !forceCpu;
   clearFault();
@@ -58,15 +70,8 @@ bool InferEngine::reloadOn(bool forceCpu) {
 InferEngine::InferEngine(InferConfig cfg) : cfg_(std::move(cfg)) {}
 
 InferEngine::~InferEngine() {
+  freeModelAndContext();
 #if defined(EDGE_USE_LLAMA)
-  if (ctx_ != nullptr) {
-    llama_free(static_cast<llama_context*>(ctx_));
-    ctx_ = nullptr;
-  }
-  if (model_ != nullptr) {
-    llama_model_free(static_cast<llama_model*>(model_));
-    model_ = nullptr;
-  }
   llama_backend_free();
 #endif
 }
@@ -93,6 +98,11 @@ bool InferEngine::loadModel() {
   }
   mparams.n_gpu_layers = gpuOk_ ? cfg_.gpuLayers : 0;
 
+  if (gpuOk_) {
+    // Point of no return: touching a CUDA device pins its primary context for the process.
+    deviceInitialized_ = true;
+  }
+
   llama_model* model = llama_model_load_from_file(cfg_.modelPath.c_str(), mparams);
   if (model == nullptr && gpuOk_) {
     std::cerr << "[infer-engine] GPU model load failed, retrying on CPU\n";
@@ -104,7 +114,6 @@ bool InferEngine::loadModel() {
     std::cerr << "[infer-engine] failed to load model: " << cfg_.modelPath << '\n';
     return false;
   }
-  model_ = model;
 
   llama_context_params cparams = llama_context_default_params();
   cparams.n_ctx = cfg_.ctxSize;
@@ -113,10 +122,13 @@ bool InferEngine::loadModel() {
 
   llama_context* ctx = llama_init_from_model(model, cparams);
   if (ctx == nullptr) {
+    // model_ is assigned only after this succeeds; an earlier assignment leaked a live model.
     std::cerr << "[infer-engine] failed to create llama context\n";
+    llama_model_free(model);
     return false;
   }
 
+  model_ = model;
   ctx_ = ctx;
   std::cerr << "[infer-engine] loaded model on " << (gpuOk_ ? "cuda" : "cpu") << '\n';
   return true;
@@ -210,8 +222,7 @@ std::string InferEngine::generate(const std::string& prompt) {
                                           static_cast<int32_t>(tokens.size()));
   const int rc = llama_decode(ctx, batch);
   if (rc != 0) {
-    // llama has no device-fault signal of its own. A failed decode is the
-    // closest thing to one, so that is what moves the ladder down a tier.
+    // llama has no device-fault signal; a failed decode is the closest thing to one.
     recordFault(DeviceFault::kRuntimeError, "llama_decode rc=" + std::to_string(rc));
     return "[error: prompt eval failed]";
   }

@@ -8,10 +8,6 @@
 
 namespace {
 
-bool probeTier(const std::string& name) {
-  return probeDevice(name) == ProbeResult::kAvailable;
-}
-
 std::string trim(const std::string& in) {
   const auto begin = in.find_first_not_of(" \t");
   if (begin == std::string::npos) {
@@ -57,13 +53,98 @@ std::vector<std::string> parseDeviceLadder(const std::string& csv) {
 
 DeviceLadder::DeviceLadder(const std::vector<std::string>& order, int quarantineMs,
                            int probeIntervalMs)
-    : quarantine_(std::max(0, quarantineMs)), probeInterval_(std::max(0, probeIntervalMs)) {
+    : quarantine_(std::max(0, quarantineMs)),
+      probeInterval_(std::max(0, probeIntervalMs)),
+      probe_(probeDevice) {
   tiers_.reserve(order.size());
   for (const std::string& name : order) {
     DeviceTier tier;
     tier.name = name;
     tiers_.push_back(tier);
   }
+}
+
+void DeviceLadder::setProbe(TierProbe probe) {
+  if (!probe) {
+    return;
+  }
+  probe_ = std::move(probe);
+  invalidateProbeCache();
+}
+
+void DeviceLadder::invalidateProbeCache() {
+  for (DeviceTier& tier : tiers_) {
+    tier.probeCacheValid = false;
+  }
+}
+
+void DeviceLadder::beginSession() {
+  for (DeviceTier& tier : tiers_) {
+    tier.sessionFatal = false;
+    tier.quarantinedUntil = std::chrono::steady_clock::time_point{};
+    tier.probeCacheValid = false;
+  }
+  std::cerr << "[device-ladder] new session: every tier is eligible again, "
+               "subject to its health check\n";
+}
+
+bool DeviceLadder::recoverEligibleTier() {
+  if (active_.empty() || activeIndex_ == 0) {
+    return false;
+  }
+
+  for (std::size_t i = 0; i < activeIndex_; ++i) {
+    DeviceTier& tier = tiers_[i];
+    if (tier.consecutiveFaults == 0) {
+      continue;
+    }
+    if (tier.sessionFatal) {
+      continue;
+    }
+    if (std::chrono::steady_clock::now() < tier.quarantinedUntil) {
+      continue;
+    }
+    if (probeTierCached(i) != ProbeResult::kAvailable) {
+      continue;
+    }
+
+    activeIndex_ = i;
+    active_ = tier.name;
+    if (activeIndex_ <= baselineIndex_) {
+      degradedReason_.clear();
+    }
+    std::cerr << "[device-ladder] " << tier.name
+              << " served its quarantine and passed its health check, restored as the active tier"
+              << (degraded() ? " (still below baseline)" : "") << '\n';
+    return true;
+  }
+  return false;
+}
+
+DeviceFault DeviceLadder::lastFault(std::size_t index) const {
+  if (index >= tiers_.size()) {
+    return DeviceFault::kNone;
+  }
+  return tiers_[index].lastFault;
+}
+
+std::size_t DeviceLadder::indexOf(const std::string& name) const {
+  for (std::size_t i = 0; i < tiers_.size(); ++i) {
+    if (tiers_[i].name == name) {
+      return i;
+    }
+  }
+  return tiers_.size();
+}
+
+std::string DeviceLadder::tierState(std::size_t index) const {
+  if (index >= tiers_.size()) {
+    return "UNKNOWN_UNAVAILABLE";
+  }
+  const DeviceTier& tier = tiers_[index];
+  const bool quarantined = std::chrono::steady_clock::now() < tier.quarantinedUntil;
+  return backendAvailabilityState(tier.name, probeTierCached(index), tier.lastFault, quarantined,
+                                  tier.sessionFatal);
 }
 
 bool DeviceLadder::usable(const DeviceTier& tier) const {
@@ -77,10 +158,10 @@ bool DeviceLadder::usable(const DeviceTier& tier) const {
 }
 
 bool DeviceLadder::healthCheck(const std::string& tierName) const {
-  return probeTier(tierName);
+  return probe_(tierName) == ProbeResult::kAvailable;
 }
 
-// A probe interval of 0 turns the cache off. Tests use that to stay predictable.
+// A probe interval of 0 turns the cache off; tests use that to stay predictable.
 ProbeResult DeviceLadder::probeTierCached(std::size_t index) const {
   DeviceTier& tier = tiers_[index];
   const auto now = std::chrono::steady_clock::now();
@@ -88,7 +169,7 @@ ProbeResult DeviceLadder::probeTierCached(std::size_t index) const {
       now - tier.probeCachedAt < probeInterval_) {
     return tier.cachedProbe;
   }
-  tier.cachedProbe = probeDevice(tier.name);
+  tier.cachedProbe = probe_(tier.name);
   tier.probeCachedAt = now;
   tier.probeCacheValid = true;
   return tier.cachedProbe;
@@ -100,14 +181,13 @@ bool DeviceLadder::select() {
     if (!usable(tier)) {
       continue;
     }
-    // The quarantine expiring is not enough. The health check has to pass too.
     if (probeTierCached(i) != ProbeResult::kAvailable) {
       continue;
     }
     activeIndex_ = i;
     active_ = tier.name;
     if (!baselineSet_) {
-      // The first tier we get defines what healthy means on this machine.
+      // The first tier we get is the baseline degraded() is measured against.
       baselineIndex_ = i;
       baselineSet_ = true;
     }
@@ -126,8 +206,9 @@ bool DeviceLadder::reportFault(DeviceFault fault, const std::string& detail) {
   }
 
   DeviceTier& tier = tiers_[activeIndex_];
-  tier.probeCacheValid = false;  // a fault is fresher news than a cached probe
+  tier.probeCacheValid = false;
   tier.consecutiveFaults += 1;
+  tier.lastFault = fault;
   tier.lastFaultDetail = detail;
   tier.quarantinedUntil = std::chrono::steady_clock::now() + quarantine_;
   if (fault == DeviceFault::kRemoved) {
@@ -141,7 +222,7 @@ bool DeviceLadder::reportFault(DeviceFault fault, const std::string& detail) {
   const std::size_t previousIndex = activeIndex_;
   const std::string previousActive = active_;
   if (!select() || activeIndex_ <= previousIndex) {
-    // Nowhere to fall. Stay put, or the worker reports an empty device name.
+    // select() cleared active_; restore it or the worker reports no device.
     activeIndex_ = previousIndex;
     active_ = previousActive;
     std::cerr << "[device-ladder] no lower tier available after " << faulted << " faulted\n";
@@ -175,8 +256,10 @@ std::string DeviceLadder::toJson() const {
            ",\"sessionFatal\":" + (tier.sessionFatal ? "true" : "false") +
            ",\"quarantineMsLeft\":" + std::to_string(quarantineLeftMs) +
            ",\"healthy\":" + (probe == ProbeResult::kAvailable ? "true" : "false") +
-           ",\"probe\":\"" + probeResultName(probe) + "\",\"platform\":\"" +
-           (backend != nullptr ? backend->platform : "unknown") + "\"}";
+           ",\"probe\":\"" + probeResultName(probe) + "\",\"state\":\"" + tierState(i) +
+           "\",\"platform\":\"" +
+           (backend != nullptr ? backend->platform : "unknown") + "\",\"note\":\"" +
+           (backend != nullptr ? backend->note : "tier not known to this build") + "\"}";
   }
   out += "]}";
   return out;

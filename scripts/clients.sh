@@ -20,7 +20,7 @@ fi
 require_env EDGE_STATE_DIR EDGE_SHELL_PUBLIC_BASE EDGE_MEETING_MFE_PORT EDGE_DOC_QA_MFE_PORT
 require_free_port "$EDGE_MEETING_MFE_PORT" "meeting-summary"
 require_free_port "$EDGE_DOC_QA_MFE_PORT" "document-qa"
-mkdir -p "$EDGE_STATE_DIR"
+mkdir -p "$EDGE_STATE_DIR" "$EDGE_LOG_DIR"
 
 start_client() {
   local name="$1" entry="$2" port="$3"

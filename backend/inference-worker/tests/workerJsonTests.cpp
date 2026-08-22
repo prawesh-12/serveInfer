@@ -1,11 +1,7 @@
 #include "testHarness.h"
 
-// extractString and extractBool sit in an anonymous namespace inside
-// worker.cpp. Nothing outside that file can see them.
-//
-// So this test includes worker.cpp whole. That also means worker.cpp must NOT be
-// listed as a source of this build target. If it were, every symbol in it would
-// be defined twice and the link would fail.
+// Includes worker.cpp whole for its anonymous-namespace parsers, so worker.cpp must NOT
+// also be listed as a source of this target.
 #include "../worker.cpp"
 
 #include <string>
@@ -78,9 +74,6 @@ EDGE_TEST(json_punctuation_inside_a_prompt_is_kept,
 
 EDGE_TEST(regex_extraction_has_no_idea_about_nesting,
           "a key nested inside another object is read as if it were top level") {
-  // The worker parses frames with a regex, not a JSON library, so a nested key
-  // is read as if it were top level. Nothing sends nested frames today. This
-  // test records the limit so a future change does not hit it by surprise.
   const std::string frame = R"({"meta":{"requestId":"inner"},"requestId":"outer"})";
   CHECK_EQ(extracted(frame, "requestId"), std::string("inner"));
 }

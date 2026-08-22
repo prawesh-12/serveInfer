@@ -17,8 +17,7 @@ std::string faultName(DeviceFault fault) {
   return deviceFaultName(fault);
 }
 
-// Puts an environment variable back the way it was, including the case where it
-// was never set. Without this, one test would leak policy state into the next.
+// Without this, one test leaks policy state into the next.
 class EnvGuard {
  public:
   explicit EnvGuard(const char* name) : name_(name) {
@@ -70,8 +69,7 @@ EDGE_TEST(foreign_platform_tiers_say_so,
     CHECK_EQ(probeName(probeDevice(name)), std::string("wrong_platform"));
   }
 #endif
-  // On Windows and macOS these tiers probe the real hardware. The answer then
-  // depends on the machine, so there is nothing safe to assert.
+  // On Windows and macOS these tiers probe real hardware, so there is nothing safe to assert.
   CHECK(true);
 }
 
@@ -184,8 +182,7 @@ EDGE_TEST(core_media_never_reports_a_removal,
   CHECK_EQ(faultName(faultFromCoreMediaStatus(-11999L)), std::string("runtime_error"));
   CHECK_EQ(faultName(faultFromCoreMediaStatus(-13000L)), std::string("runtime_error"));
 
-  // A3 and A4 differ here on purpose. Apple tells you what it cannot run.
-  // It never tells you the accelerator has gone.
+  // Apple tells you what it cannot run; it never tells you the accelerator has gone.
   for (long status = -14000L; status <= 200L; status += 7L) {
     CHECK(faultFromCoreMediaStatus(status) != DeviceFault::kRemoved);
   }

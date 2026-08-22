@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "deviceLadder.h"
+#include "gpuResourceOwner.h"
 
 struct InferConfig {
   std::string modelPath;
@@ -17,20 +18,21 @@ struct InferConfig {
   bool forceCpu = false;
 };
 
-class InferEngine {
+class InferEngine : public GpuResourceOwner {
  public:
   explicit InferEngine(InferConfig cfg);
-  ~InferEngine();
+  ~InferEngine() override;
 
   bool init();
   bool isUsingGPU() const {
     return gpuOk_;
   }
 
-  // The bytes come from /dev/shm, so this is far cheaper than a cold start.
   bool reloadOn(bool forceCpu);
 
-  // A real backend failure, not just a short answer.
+  bool releaseDeviceResources() override;
+  bool deviceResourcesResident() const override;
+
   DeviceFault lastFault() const {
     return lastFault_;
   }
@@ -48,6 +50,7 @@ class InferEngine {
 
  private:
   bool loadModel();
+  void freeModelAndContext();
   std::vector<int32_t> tokenize(const std::string& text);
   void runDecodeLoop(const std::function<void(const std::string&)>& onToken);
 
@@ -56,6 +59,7 @@ class InferEngine {
 
   InferConfig cfg_;
   bool gpuOk_ = true;
+  bool deviceInitialized_ = false;
   DeviceFault lastFault_ = DeviceFault::kNone;
   std::string lastFaultDetail_;
   void* model_ = nullptr;  // llama_model*

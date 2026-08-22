@@ -25,6 +25,10 @@ __pycache__/
 .env.*
 !.env.example
 
+# Runtime logs.
+logs/*
+!logs/.gitkeep
+
 # Model weights
 *.gguf
 backend/models/*
@@ -43,6 +47,10 @@ core.*
 vgcore.*
 
 extras/
+
+# An upstream llama.cpp checkout kept here for comparison against the vendored
+# copy. It carries its own .git and must never be committed into this repo.
+main-llama.cpp/
 
 # Merge leftovers
 *.orig

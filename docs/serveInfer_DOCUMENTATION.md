@@ -1050,7 +1050,7 @@ api-server then rejects with `no_ready_workers`, and a wait that should have bee
 becomes a 503.
 
 `EDGE_MAX_PER_MFE` must be strictly less than `EDGE_MAX_SLOTS`, or the fairness rule does nothing.
-With both at 2, one MFE can legally hold every slot, which is the exact case the assignment forbids.
+With both at 2, one MFE can legally hold every slot, which is the case the fairness rule exists to prevent.
 Shipped values are 4 slots, 4 workers, 2 per MFE, so one MFE tops out at half the pool.
 
 Nothing validates either invariant at startup. Both are yours to get right in `.env`.
@@ -1207,8 +1207,8 @@ process. Nothing downstream covered it, because `backend/api-server/ipc.js` only
 timeouts and the worker has none at all.
 
 Set `EDGE_EXEC_TIMEOUT_MS` for the slowest tier on your device ladder, not the fastest. A legitimate
-CUDA-to-CPU fallback is roughly an order of magnitude slower, and a timeout tuned for the GPU will
-kill it as a stuck job.
+CUDA-to-CPU fallback is much slower — by how much is unmeasured, no GPU inference having been run
+on this machine — and a timeout tuned for the GPU will kill it as a stuck job.
 
 ### 7.7 Backpressure the client can act on
 
@@ -1365,15 +1365,14 @@ it trips.
 
 ```bash
 pkill -f edge-inference-worker
-tail -3 /tmp/edge-crash.log
+tail -3 ./logs/edge-crash.log
 ```
 
 ```json
 {"ts":1755856320,"pid":48213,"type":"worker","workerId":2,"status":15,"reason":"signal_15"}
 ```
 
-`pkill` sends SIGTERM, so the reason is `signal_15`. A real segfault reads `signal_11`. The
-assignment describes a Windows access violation, and `signal_11` is the Linux equivalent. The
+`pkill` sends SIGTERM, so the reason is `signal_15`. A real segfault reads `signal_11`. A Windows access violation is the same class of fault, and `signal_11` is its Linux equivalent. The
 recovery contract is the same, only the fault code and the process API differ.
 
 ---
@@ -1823,7 +1822,7 @@ command-line flag that `scripts/backend.sh` doesn't pass.
 | `EDGE_WORKER_SOCKET_PREFIX` | `/tmp/edge-worker-` | worker sockets are prefix + id + `.sock` | api-server throws, supervisor exits 1 |
 | `EDGE_WORKER_CONNECT_TIMEOUT_MS` | `3000` | connect timeout and probe timeout | api-server throws |
 | `EDGE_API_NOTIFY_SOCK` | `/tmp/edge-api-notify.sock` | crash notifications | api-server throws, crashes never reach in-flight requests |
-| `EDGE_CRASH_LOG` | `/tmp/edge-crash.log` | append-only crash record, re-read by the breaker | supervisor exits 1 |
+| `EDGE_CRASH_LOG` | `./logs/edge-crash.log` | append-only crash record, re-read by the breaker | supervisor exits 1 |
 | `EDGE_MODEL_CONFIG_PATH` | `/tmp/edge-model-config.json` | snapshot written at supervisor start | supervisor exits 1 |
 
 #### Worker recovery
@@ -1998,22 +1997,24 @@ pip3 install -U huggingface-hub
 
 ### Download the model
 
-Required before `make start`, which aborts without it.
+Required before `make backend`, which aborts without it.
 
 ```bash
 hf download microsoft/Phi-3-mini-4k-instruct-gguf \
   Phi-3-mini-4k-instruct-q4.gguf \
-  --local-dir ./models
+  --local-dir ./backend/models
 ```
 
 ### The Make targets
 
 ```bash
-make run      # stop -> build -> start. The usual one.
-make build    # cmake C++ targets into build/, then npm install in api-server/ and shell-app/
-make start    # launch everything, fails fast on a taken port or a missing model file
-make stop     # kill both process trees, remove sockets and /dev/shm objects
-make restart  # identical to run
+make run       # stop -> build -> start all three tiers. The usual one.
+make build     # cmake C++ targets into build/, then npm install in the two node services
+make backend   # the runtime tier alone: supervisor, model cache, workers, api-server, shell app
+make clients   # the two sample apps
+make dashboard # the operator status page
+make stop      # stop every tier, remove sockets and /dev/shm objects
+make restart   # identical to run
 ```
 
 ```mermaid
@@ -2103,7 +2104,7 @@ curl -i -X POST http://127.0.0.1:11434/infer \
 
 # 5. crash recovery
 pkill -f edge-inference-worker      # expect 503 worker_crashed, then a new line in $EDGE_CRASH_LOG
-tail -3 /tmp/edge-crash.log
+tail -3 ./logs/edge-crash.log
 
 # 6. one shared model copy, not one per worker
 ls -l /dev/shm/edge-model-weights
@@ -2129,14 +2130,15 @@ helper (`clients/document-qa/public/retry.js`). None of them needs a running mod
 
 ## 17. Troubleshooting
 
-### `make start` aborts with a port already in use
+### A tier aborts with a port already in use
 
 ```
-[start] EDGE_API_PORT=11434 is already in use.
-[start] run 'make stop' if an old runtime is still running, or change EDGE_API_PORT in .env.
+[backend] api-server port 11434 is already in use.
+[backend] run 'make backend-stop' first, or change it in .env.
 ```
 
-An old runtime is still up. Run `make stop` first. It also removes stale sockets and shared-memory
+An old runtime is still up. Run that tier's stop target (`make backend-stop`, `make
+clients-stop`, `make dashboard-stop`) or `make stop` for all of them. It also removes stale sockets and shared-memory
 objects, which otherwise break the next boot on their own.
 
 ### `Missing required environment variable: EDGE_SOMETHING`
@@ -2186,7 +2188,7 @@ back from `$EDGE_CRASH_LOG`. Nothing closes the breaker automatically. Fix the u
 then:
 
 ```bash
-make stop && rm -f /tmp/edge-crash.log && make start
+make stop && rm -f ./logs/edge-crash.log && make run
 ```
 
 A worker that exhausted its `EDGE_WORKER_RECOVERY_ATTEMPTS` probes stays out too, and for that one
@@ -2217,9 +2219,10 @@ retryable, so a user sees a retry rather than a failure.
 
 ### `504 exec_timeout` on the CPU tier
 
-`EDGE_EXEC_TIMEOUT_MS` is tuned for the GPU. A CUDA-to-CPU fallback is roughly an order of magnitude
-slower on tokens per second, so set the bound for the slowest tier in `EDGE_DEVICE_LADDER`.
-`X-Latency-Mode: degraded` on the response is the signal that you're on a lower tier.
+`EDGE_EXEC_TIMEOUT_MS` is tuned for the GPU. A CUDA-to-CPU fallback is much slower on tokens per
+second — the factor is unmeasured here — so set the bound for the slowest tier in
+`EDGE_DEVICE_LADDER`. `X-Latency-Mode: degraded` on the response is the signal that you're on a
+lower tier.
 
 ### Empty or weak output
 

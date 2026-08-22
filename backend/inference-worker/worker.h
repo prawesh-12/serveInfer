@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "backendRouter.h"
 #include "deviceLadder.h"
 #include "inferEngine.h"
 
@@ -34,6 +35,12 @@ struct WorkerConfig {
   std::vector<std::string> deviceLadder{"cuda", "cpu"};
   int deviceQuarantineMs = 60000;
   int deviceProbeIntervalMs = 5000;
+
+  // "cuda" or "cpu". Empty is the standalone case, where the ladder chooses.
+  std::string assignedBackend;
+
+  // "reexec" is the only way to give the CUDA primary context back.
+  bool reexecAfterDeviceClassFallback = true;
 };
 
 class Worker {
@@ -45,10 +52,14 @@ class Worker {
   int run();
   void requestStop();
 
+  int exitCode() const {
+    return exitCode_;
+  }
+
  private:
   bool attachSharedMemory();
   bool selectDevice();
-  bool escalateAfterFault(DeviceFault fault, const std::string& detail);
+  bool onTierChanged(const std::string& previous, const std::string& next);
   std::string generateWithFallback(const std::string& prompt);
   void streamWithFallback(const std::string& prompt,
                           const std::function<void(const std::string&)>& onToken,
@@ -69,9 +80,10 @@ class Worker {
   std::atomic<bool> running_{false};
   std::atomic<bool> cudaAvailable_{false};
   std::string activeDevice_{"cpu"};
-  std::unique_ptr<DeviceLadder> ladder_;
-  // Connections share one engine and a fallback rebuilds it in place, so only
-  // one escalation may run at a time.
+  std::unique_ptr<BackendRouter> router_;
+  std::shared_ptr<QualcommHexagonBackend> hexagonBackend_;
+  int exitCode_ = 0;
+  // A fallback rebuilds the engine in place, so only one escalation may run at a time.
   std::mutex engineMutex_;
   InferEngine* engine_ = nullptr;
 

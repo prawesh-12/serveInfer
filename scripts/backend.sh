@@ -57,7 +57,7 @@ fi
 
 require_free_port "$EDGE_API_PORT" "api-server"
 require_free_port "$EDGE_SHELL_PORT" "shell-app"
-mkdir -p "$EDGE_STATE_DIR"
+mkdir -p "$EDGE_STATE_DIR" "$EDGE_LOG_DIR"
 
 export EDGE_MODEL_PATH="$MODEL_PATH"
 
@@ -83,5 +83,5 @@ echo ""
 echo "  shell API:  http://127.0.0.1:$EDGE_SHELL_PORT"
 echo "  agent API:  http://127.0.0.1:$EDGE_API_PORT"
 echo "  workers:    $EDGE_WORKER_COUNT   slots: $EDGE_MAX_SLOTS   per client: $EDGE_MAX_PER_MFE"
-echo "  logs:       $EDGE_STATE_DIR/backend-*.log"
+echo "  logs:       $EDGE_LOG_DIR/backend-*.log"
 echo ""
