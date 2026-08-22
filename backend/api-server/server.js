@@ -154,7 +154,13 @@ app.get('/health', (_req, res) => {
   const health = workerPool.getHealth();
   const requests = registry.snapshot();
   res.json({
-    workers: health.workers.map((w) => ({ id: w.id, status: w.status })),
+    workers: health.workers.map((w) => ({
+      id: w.id,
+      status: w.status,
+      device: w.device,
+      degraded: w.degraded,
+      degradedReason: w.degradedReason,
+    })),
     activeSlots: health.activeSlots,
     uptime: Math.floor(health.uptimeMs / 1000),
     requests: {

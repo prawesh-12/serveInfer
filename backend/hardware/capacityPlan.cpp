@@ -1,9 +1,37 @@
 #include "capacityPlan.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 
 namespace {
+
+std::string jsonEscape(const std::string& input) {
+  std::string out;
+  out.reserve(input.size() + 8);
+  for (const char ch : input) {
+    switch (ch) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        out += ch;
+    }
+  }
+  return out;
+}
 
 int clampToRange(long long value, int ceiling) {
   if (value <= 0) {
@@ -152,6 +180,41 @@ std::vector<WorkerAssignment> assignWorkers(const CapacityPlan& plan, int worker
     assignments.push_back(std::move(assignment));
   }
   return assignments;
+}
+
+std::string capacityPlanToJson(const CapacityPlan& plan) {
+  std::string out = "{";
+  out += "\"gpuWorkerCapacity\":" + std::to_string(plan.gpuWorkerCapacity);
+  out += ",\"cpuWorkerCapacity\":" + std::to_string(plan.cpuWorkerCapacity);
+  out += ",\"totalVramMb\":" + std::to_string(plan.totalVramMb);
+  out += ",\"freeVramMb\":" + std::to_string(plan.freeVramMb);
+  out += ",\"usableGpuMb\":" + std::to_string(plan.usableGpuMb);
+  out += ",\"totalRamMb\":" + std::to_string(plan.totalRamMb);
+  out += ",\"availableRamMb\":" + std::to_string(plan.availableRamMb);
+  out += ",\"usableRamMb\":" + std::to_string(plan.usableRamMb);
+  out += ",\"gpuName\":\"" + jsonEscape(plan.gpuName) + "\"";
+  out += ",\"gpuIndex\":" + std::to_string(plan.gpuIndex);
+  out += ",\"gpuReason\":\"" + jsonEscape(plan.gpuReason) + "\"";
+  out += ",\"cpuReason\":\"" + jsonEscape(plan.cpuReason) + "\"";
+  out += "}";
+  return out;
+}
+
+std::string workerAssignmentsToJson(const std::vector<WorkerAssignment>& assignments) {
+  std::string out = "[";
+  for (std::size_t i = 0; i < assignments.size(); ++i) {
+    const WorkerAssignment& assignment = assignments[i];
+    if (i > 0) {
+      out += ",";
+    }
+    out += "{\"workerId\":" + std::to_string(assignment.workerId);
+    out += ",\"backend\":\"" + std::string(workerBackendName(assignment.backend)) + "\"";
+    out += ",\"gpuIndex\":" + std::to_string(assignment.gpuIndex);
+    out += ",\"reason\":\"" + jsonEscape(assignment.reason) + "\"";
+    out += "}";
+  }
+  out += "]";
+  return out;
 }
 
 std::vector<std::pair<std::string, std::string>> workerBackendEnv(

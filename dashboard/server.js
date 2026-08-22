@@ -10,6 +10,7 @@ const port = Number(process.env.DASHBOARD_PORT || 3001);
 const shellBase = process.env.SHELL_API_BASE || 'http://127.0.0.1:3000';
 const apiBase = process.env.AGENT_API_BASE || 'http://127.0.0.1:11434';
 const stateDir = process.env.EDGE_STATE_DIR || '/tmp/edge-runtime';
+const modelConfigPath = process.env.EDGE_MODEL_CONFIG_PATH || '/tmp/edge-model-config.json';
 
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -123,6 +124,15 @@ function readRegistry() {
   return { processes, stale, stateDir };
 }
 
+// Absent means no backend has booted since the file was cleared, not an error.
+function readModelConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(modelConfigPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 async function buildStatus() {
   const [scheduler, agent, api] = await Promise.all([
     getJson(`${shellBase}/api/health`),
@@ -140,6 +150,7 @@ async function buildStatus() {
     scheduler: scheduler.body || null,
     agent: agent.body || null,
     registry,
+    modelConfig: readModelConfig(),
   };
 }
 

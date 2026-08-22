@@ -386,3 +386,46 @@ EDGE_TEST(capacity_never_raises_the_worker_count_above_what_was_configured,
   const CapacityPlan plan = planCapacity(withGpu(80000, 81920, 262144), limits(512, 2048, 2));
   CHECK_EQ(placeableWorkerCount(plan, 2), 2);
 }
+
+EDGE_TEST(the_plan_serializes_the_numbers_the_dashboard_shows,
+          "capacityPlanToJson carries the budgets and the chosen gpu, because the supervisor is "
+          "the only process that ever probed the machine") {
+  const CapacityPlan plan = planCapacity(withGpu(3758, 4096, 12288), limits(512, 2048, 4));
+  const std::string json = capacityPlanToJson(plan);
+
+  CHECK(json.find("\"gpuWorkerCapacity\":1") != std::string::npos);
+  CHECK(json.find("\"usableGpuMb\":3246") != std::string::npos);
+  CHECK(json.find("\"gpuName\":\"NVIDIA GeForce RTX 2050\"") != std::string::npos);
+  CHECK(json.find("\"gpuIndex\":0") != std::string::npos);
+  CHECK(json.find("\"cpuWorkerCapacity\":") != std::string::npos);
+  CHECK(json.front() == '{' && json.back() == '}');
+}
+
+EDGE_TEST(a_reason_containing_quotes_does_not_break_the_model_config,
+          "the reasons are free text written by the planner, and the file they land in is parsed "
+          "by the dashboard") {
+  CapacityPlan plan;
+  plan.gpuName = "GPU \"zero\"";
+  plan.gpuReason = "line one\nline \"two\"";
+
+  const std::string json = capacityPlanToJson(plan);
+  CHECK(json.find("GPU \\\"zero\\\"") != std::string::npos);
+  CHECK(json.find("line one\\nline \\\"two\\\"") != std::string::npos);
+  CHECK(json.find('\n') == std::string::npos);
+}
+
+EDGE_TEST(assignments_serialize_one_entry_per_started_worker,
+          "the per-worker backend and the reason for it are the only place an operator can see "
+          "why a worker landed on cpu") {
+  const CapacityPlan plan = planCapacity(withGpu(7000, 8192, 12288), limits(1000, 2048, 4));
+  const std::vector<WorkerAssignment> assignments = assignWorkers(plan, 3);
+  const std::string json = workerAssignmentsToJson(assignments);
+
+  CHECK(json.front() == '[' && json.back() == ']');
+  CHECK(json.find("\"workerId\":0") != std::string::npos);
+  CHECK(json.find("\"workerId\":2") != std::string::npos);
+  CHECK(json.find("\"backend\":\"cuda\"") != std::string::npos);
+  CHECK(json.find("\"backend\":\"cpu\"") != std::string::npos);
+
+  CHECK_EQ(workerAssignmentsToJson({}), std::string("[]"));
+}

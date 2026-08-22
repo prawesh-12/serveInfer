@@ -686,7 +686,10 @@ void Supervisor::writeModelConfig() const {
   out << "{\"modelPath\":\"" << jsonEscape(config_.modelPath) << "\",\"shmName\":\""
       << jsonEscape(config_.shmName) << "\",\"workerCount\":" << effectiveWorkerCount_
       << ",\"configuredWorkerCount\":" << config_.workerCount
-      << ",\"pollIntervalMs\":" << config_.pollIntervalMs << "}\n";
+      << ",\"pollIntervalMs\":" << config_.pollIntervalMs
+      << ",\"hardware\":" << hardwareReportToJson(hardware_)
+      << ",\"capacity\":" << capacityPlanToJson(plan_)
+      << ",\"assignments\":" << workerAssignmentsToJson(assignments_) << "}\n";
 }
 
 bool Supervisor::crashLimitOpenFromDisk(const ProcessInfo& info) const {

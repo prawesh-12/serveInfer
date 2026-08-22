@@ -129,6 +129,12 @@ button:hover {
     align-items: start;
 }
 
+.stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
 .card {
     border: 1px solid var(--line);
     border-radius: 8px;

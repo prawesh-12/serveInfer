@@ -17,12 +17,12 @@ textarea {
 }
 
 button {
-    min-height: 40px;
+    min-height: 32px;
     border: 1px solid #b8c2d3;
     border-radius: 6px;
     background: #ffffff;
     color: #182635;
-    padding: 9px 12px;
+    padding: 5px 10px;
     cursor: pointer;
 }
 
@@ -38,7 +38,7 @@ button:disabled {
 
 .meeting-page {
     min-height: 100vh;
-    padding: 24px;
+    padding: 14px;
 }
 
 .mfe-header,
@@ -46,17 +46,17 @@ button:disabled {
 .action-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
 }
 
 .mfe-header {
     justify-content: space-between;
-    margin-bottom: 18px;
+    margin-bottom: 10px;
 }
 
 .mfe-header h2 {
     margin: 0;
-    font-size: 28px;
+    font-size: 19px;
     line-height: 1.2;
 }
 
@@ -73,18 +73,17 @@ button:disabled {
     border: 1px solid #d8e0ec;
     border-radius: 8px;
     background: #ffffff;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-    padding: 16px;
+    padding: 12px;
 }
 
 .panel-header {
     justify-content: space-between;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .panel-header h3 {
     margin: 0;
-    font-size: 17px;
+    font-size: 14px;
 }
 
 .panel-header span {
@@ -93,11 +92,11 @@ button:disabled {
 }
 
 .status-pill {
-    min-width: 116px;
+    min-width: 96px;
     border: 1px solid #cbd5e1;
     border-radius: 999px;
     background: #f8fafc;
-    padding: 7px 10px;
+    padding: 4px 10px;
     color: #475569;
     text-align: center;
     font-size: 13px;
@@ -117,7 +116,7 @@ button:disabled {
 
 textarea {
     width: 100%;
-    min-height: 150px;
+    min-height: 96px;
     resize: vertical;
     border: 1px solid #c9d3e3;
     border-radius: 6px;
@@ -126,35 +125,31 @@ textarea {
 
 .action-row {
     flex-wrap: wrap;
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .queue-banner {
     display: block;
-    margin-top: 12px;
-    border: 1px solid #bfdbfe;
+    margin-top: 8px;
     border-radius: 6px;
     background: #eff6ff;
-    padding: 10px 12px;
+    padding: 6px 10px;
     color: #1e3a8a;
 }
 
 .split-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
-    gap: 14px;
-    margin-top: 14px;
+    gap: 10px;
+    margin-top: 10px;
 }
 
 .scroll-box,
 .event-log {
-    min-height: 300px;
-    max-height: calc(100vh - 250px);
+    min-height: 120px;
+    max-height: calc(100vh - 220px);
     overflow: auto;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    background: #fbfdff;
-    padding: 12px;
+    padding: 2px 0 0;
     white-space: pre-wrap;
 }
 

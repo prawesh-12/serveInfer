@@ -8,6 +8,9 @@ const processSummaryEl = document.getElementById("processSummary");
 const workerListEl = document.getElementById("workerList");
 const workerSummaryEl = document.getElementById("workerSummary");
 const schedulerGridEl = document.getElementById("schedulerGrid");
+const hardwareGridEl = document.getElementById("hardwareGrid");
+const hardwareListEl = document.getElementById("hardwareList");
+const hardwareSummaryEl = document.getElementById("hardwareSummary");
 const mfeRequestListEl = document.getElementById("mfeRequestList");
 const mfeRequestSummaryEl = document.getElementById("mfeRequestSummary");
 const rawJsonEl = document.getElementById("rawJson");
@@ -68,6 +71,99 @@ function registryRows(registry) {
     return out.join("");
 }
 
+function gb(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "-";
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function usage(freeBytes, totalBytes) {
+    if (!Number.isFinite(totalBytes) || totalBytes <= 0) return "-";
+    const used = Math.max(0, totalBytes - (freeBytes || 0));
+    const pct = Math.round((used / totalBytes) * 100);
+    return `${gb(used)} used · ${gb(freeBytes)} free · ${pct}%`;
+}
+
+function mb(value) {
+    if (!Number.isFinite(value) || value <= 0) return "-";
+    return `${value} MB`;
+}
+
+function workerTierRow(assignment, live) {
+    const planned = assignment?.backend || "-";
+    const running = live?.device || null;
+    const label = `Worker ${assignment?.workerId ?? live?.id}`;
+
+    if (!running) {
+        return row(label, `planned ${planned} · no request yet`, "warn", "warn");
+    }
+    if (live.degraded) {
+        return row(label, `${planned} → ${running} · ${live.degradedReason || "degraded"}`, "bad", "bad");
+    }
+    if (running !== planned) {
+        return row(label, `planned ${planned} · running ${running}`, "warn", "warn");
+    }
+    return row(label, `${running}`, "ok");
+}
+
+function renderHardware(modelConfig, workers) {
+    const hardware = modelConfig?.hardware;
+    const capacity = modelConfig?.capacity;
+    const assignments = Array.isArray(modelConfig?.assignments) ? modelConfig.assignments : [];
+
+    if (!hardware) {
+        hardwareSummaryEl.textContent = "no probe";
+        hardwareGridEl.innerHTML = "";
+        hardwareListEl.innerHTML = row("No discovery on file", "start the backend to probe", "warn", "warn");
+        return;
+    }
+
+    const gpus = Array.isArray(hardware.gpus) ? hardware.gpus : [];
+    hardwareSummaryEl.textContent = hardware.probeOk
+        ? gpus.length
+            ? `${gpus.length} gpu${gpus.length > 1 ? "s" : ""}`
+            : "cpu only"
+        : "probe failed";
+
+    hardwareGridEl.innerHTML = [
+        statWithDot("Probe", hardware.probeOk ? "ok" : "failed", hardware.probeOk ? "ok" : "bad"),
+        stat("Accelerator", gpus.length ? capacity?.gpuName || gpus[0].name : "none"),
+        stat("RAM free", gb(hardware.ramAvailableBytes)),
+        stat("Placed", `${modelConfig.workerCount ?? "-"} / ${modelConfig.configuredWorkerCount ?? "-"}`),
+    ].join("");
+
+    const rows = [];
+
+    for (const gpu of gpus) {
+        rows.push(row(gpu.description || gpu.name, usage(gpu.freeBytes, gpu.totalBytes), "ok"));
+        rows.push(row("VRAM total", gb(gpu.totalBytes)));
+        rows.push(row("VRAM free", gb(gpu.freeBytes)));
+    }
+    if (gpus.length === 0) {
+        rows.push(row("No GPU found", hardware.note || "cpu only", "warn", "warn"));
+    }
+
+    rows.push(row("Host RAM", usage(hardware.ramAvailableBytes, hardware.ramTotalBytes), "ok"));
+    rows.push(row("RAM total", gb(hardware.ramTotalBytes)));
+    rows.push(row("RAM free", gb(hardware.ramAvailableBytes)));
+
+    if (capacity) {
+        if (gpus.length) {
+            rows.push(row("GPU budget", `${mb(capacity.usableGpuMb)} usable of ${mb(capacity.freeVramMb)} free`));
+        }
+        rows.push(row("CPU budget", `${mb(capacity.usableRamMb)} usable of ${mb(capacity.availableRamMb)} available`));
+        rows.push(row("Capacity", `${capacity.gpuWorkerCapacity} gpu + ${capacity.cpuWorkerCapacity} cpu worker(s)`));
+        if (capacity.gpuReason) rows.push(row("GPU plan", capacity.gpuReason));
+        if (capacity.cpuReason) rows.push(row("CPU plan", capacity.cpuReason));
+    }
+
+    const liveById = new Map((workers || []).map((worker) => [worker.id, worker]));
+    for (const assignment of assignments) {
+        rows.push(workerTierRow(assignment, liveById.get(assignment.workerId)));
+    }
+
+    hardwareListEl.innerHTML = rows.join("");
+}
+
 function render(status) {
     const shellHealth = status.endpoints?.shell?.health;
     const apiHealth = status.endpoints?.api?.health;
@@ -118,6 +214,8 @@ function render(status) {
         stat("Per MFE", scheduler.limits?.maxPerMfe ?? "-"),
         stat("Agent busy", agent.activeSlots ?? 0),
     ].join("");
+
+    renderHardware(status.modelConfig, workers);
 
     const activeEntries = Object.entries(scheduler.activeByMfe || {});
     mfeRequestSummaryEl.textContent = activeEntries.length

@@ -34,6 +34,9 @@ struct CapacityPlan {
 
 CapacityPlan planCapacity(const HardwareReport& report, const CapacityLimits& limits);
 
+// The supervisor is the only process that probes; these go into the model-config file.
+std::string capacityPlanToJson(const CapacityPlan& plan);
+
 enum class WorkerBackend {
   kCuda,
   kCpu,
@@ -52,6 +55,8 @@ struct WorkerAssignment {
 int placeableWorkerCount(const CapacityPlan& plan, int configuredCount);
 
 std::vector<WorkerAssignment> assignWorkers(const CapacityPlan& plan, int workerCount);
+
+std::string workerAssignmentsToJson(const std::vector<WorkerAssignment>& assignments);
 
 std::vector<std::pair<std::string, std::string>> workerBackendEnv(
     const WorkerAssignment& assignment);
