@@ -56,3 +56,6 @@ main-llama.cpp/
 .idea/
 .vscode/
 *.swp
+
+# diagrams
+*.eraser
