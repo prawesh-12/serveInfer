@@ -36,6 +36,7 @@ and nothing is being renamed, so read `edge` as ServeInfer everywhere below.
 - [Architecture](#architecture)
   - [The whole system, end to end](#the-whole-system-end-to-end)
   - [The clients](#the-clients)
+- [Tech stack](#tech-stack)
 - [Processes and startup](#processes-and-startup)
 - [A request](#a-request)
 - [Scheduling](#scheduling)
@@ -247,6 +248,41 @@ clients.
 
 `mfeId` is just a string the scheduler counts against. A new client joins by picking a name and
 adding its origin to `EDGE_ALLOWED_MFE_ORIGINS`.
+
+---
+
+## Tech stack
+
+![C++17](https://img.shields.io/badge/C%2B%2B17-00599C?style=flat-square&logo=cplusplus&logoColor=white)
+![CMake](https://img.shields.io/badge/CMake-064F8C?style=flat-square&logo=cmake&logoColor=white)
+![llama.cpp](https://img.shields.io/badge/llama.cpp-000000?style=flat-square)
+![ggml](https://img.shields.io/badge/ggml%200.21.0-000000?style=flat-square)
+![CUDA](https://img.shields.io/badge/CUDA%2012.0-76B900?style=flat-square&logo=nvidia&logoColor=white)
+![GGUF](https://img.shields.io/badge/GGUF%20Q4-5C2D91?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js%2024-339933?style=flat-square&logo=nodedotjs&logoColor=white)
+![Express](https://img.shields.io/badge/Express%204-000000?style=flat-square&logo=express&logoColor=white)
+![React](https://img.shields.io/badge/React%2019-61DAFB?style=flat-square&logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite%208-646CFF?style=flat-square&logo=vite&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind%204-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
+![pnpm](https://img.shields.io/badge/pnpm-F69220?style=flat-square&logo=pnpm&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
+
+**Inference: [llama.cpp](https://github.com/ggml-org/llama.cpp).** The only library here that
+touches the model. Vendored at [llama-src](backend/inference-worker/llama-src), pinned to commit
+`e85caa81` (ggml `0.21.0`), built with `GGML_CUDA=ON`, and called from one file,
+[inferEngine.cpp](backend/inference-worker/inferEngine.cpp). No PyTorch, no ONNX, no Python.
+
+**Model:** Phi-3-mini-4k-instruct-q4, a 2.23 GiB 4-bit GGUF, held in POSIX shared memory.
+
+**Runtime:** C++17 for the supervisor, model cache and workers. Node.js 24 and Express 4 for the
+api-server and the shell. IPC is newline-delimited JSON over AF_UNIX, parsed with `std::regex`
+because the C++ side has no JSON library.
+
+**Frontend:** React 19, Vite 8, Tailwind 4, one pnpm workspace for all six pages and the dashboard.
+
+**Optional:** `sarvamai` for the remote tier, loaded only when it is turned on.
+
+**Tests:** `node:test` and a small C++ assert harness. No test framework.
 
 ---
 
