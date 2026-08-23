@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 ServeInfer — an on-device, multi-process LLM inference runtime for GGUF models, plus a
-micro-frontend client stack that consumes it. Written as a submission for the Sarvam AI Backend
-Intern assignment.
+micro-frontend client stack that consumes it.
 
 Naming: the product is ServeInfer, but **every** binary, identifier and env var says `edge` /
 `EDGE_`. Don't rename.
@@ -17,7 +16,7 @@ Naming: the product is ServeInfer, but **every** binary, identifier and env var 
 make build       # cmake backend/ into build/, then npm install in the two node services
 
 make backend     # supervisor (model-cache, api-server, workers) + shell-app
-make clients      # the two sample apps
+make clients      # the six sample apps: chat_1 to chat_5 plus all
 make dashboard    # the operator status page
 
 make backend-stop # each tier stops on its own, touching nothing else
@@ -66,7 +65,7 @@ cmake -S backend -B build -DEDGE_ENABLE_LLAMA=OFF && cmake --build build -j"$(np
 
 This path works: `llama.h` is guarded, so the tree builds with no vendored backend.
 Without the `EDGE_USE_LLAMA` define, `InferEngine::generate()` returns the literal string
-`"Inference response: <prompt>"` (`backend/inference-worker/inferEngine.cpp:270-275`). No model file needed
+`"Inference response: <prompt>"` (`backend/inference-worker/inferEngine.cpp:285`). No model file needed
 for the C++ build, though `scripts/backend.sh` still checks one exists. Real backend on CPU only:
 `-DEDGE_ENABLE_CUDA=OFF`.
 
@@ -89,7 +88,7 @@ React + Tailwind built with pnpm: `pnpm install` once in `clients/`, then `pnpm 
 
 ### Tests, lint, CI
 
-308 tests, no new dependencies: 91 JavaScript and 217 C++. `node:test` for the JavaScript
+321 tests, no new dependencies: 91 JavaScript and 230 C++. `node:test` for the JavaScript
 in `tests/`, a small assert harness for the C++ in `backend/inference-worker/tests/`. Nothing needs the model file, a GPU
 or a running stack.
 
@@ -100,24 +99,24 @@ make test-cpp
 ```
 
 No linter config and no CI. Untested: `Worker::jsonEscape` (a private static, not reachable
-the way the anonymous-namespace parsers are) and the supervisor's circuit breaker, whose logic
-sits in `Supervisor` methods that would need a socket-free harness.
+the way the anonymous-namespace parsers are).
 
 Manual end-to-end checks:
 
 ```bash
 curl -X POST http://127.0.0.1:11434/infer -H 'Content-Type: application/json' \
-  -d '{"prompt":"What is 2+2?","requestId":"smoke-1","mfeId":"doc-qa"}'
-curl -N "http://127.0.0.1:11434/infer/stream?prompt=Say+hi&requestId=s1&mfeId=doc-qa"
+  -d '{"prompt":"What is 2+2?","requestId":"smoke-1","mfeId":"chat_1"}'
+curl -N "http://127.0.0.1:11434/infer/stream?prompt=Say+hi&requestId=s1&mfeId=chat_1"
 pkill -f edge-inference-worker      # expect 503 worker_crashed, then a new line in $EDGE_CRASH_LOG
 ls -l /dev/shm/edge-model-weights   # one shared copy, not one per worker
 ```
 
-Browser: `chat_1` `:5001` (press "Burst LOW x5" to see queue positions), `chat_2` `:5002`
+Browser: `all` `:5000` (every client in one grid, the easiest way to see contention),
+`chat_1` `:5001` (press "Burst LOW x5" to see queue positions), `chat_2` `:5002`
 (multi-line streaming), `chat_3`-`chat_5` `:5003`-`:5005`, status dashboard `:3001`.
 
 The C++ side is five binaries: `edge-device-tests` (28, ladder and vendor error mapping),
-`edge-worker-json-tests` (15, frame parsing), `edge-hardware-tests` (131, capacity
+`edge-worker-json-tests` (15, frame parsing), `edge-hardware-tests` (144, capacity
 planning, backend assignment, the CUDA environment guarantee, the NPU/ANE state machines
 driven through injectable fakes, worker reassignment, fault injection, and the streaming
 contract across a fallback) and `edge-remote-recovery-tests` (32, the remote tier's two
@@ -127,10 +126,10 @@ foreign nonce, a malformed header and the header's byte layout).
 `make test-cpp` builds and runs all five.
 
 Already covered by the suites: scheduler priority and aging
-(`backend/shell-app/scheduler.js:196-205`), the worker's regex JSON parsing
-(`backend/inference-worker/worker.cpp:22-67`), the env parser (`backend/config/env.js:10`), the
-device ladder and the vendor error mapping. The circuit breaker
-(`backend/supervisor/supervisor.cpp:50-76`) is still the obvious next one.
+(`backend/shell-app/scheduler.js:202-205`), the worker's regex JSON parsing
+(`backend/inference-worker/worker.cpp:31-99`), the env parser (`backend/config/env.js`), the
+device ladder and the vendor error mapping, capacity planning, worker liveness, and the shm
+handshake.
 
 ## Architecture
 
@@ -140,12 +139,14 @@ The repo is split by who owns a process, and each tier starts and stops on its o
 
 - `backend/` is the runtime. Supervisor, model cache, workers, api-server, shell.
   Nothing in here serves a browser.
-- `clients/` are the sample user apps: `chat_1` to `chat_5`, five React pages built
-  from one shared package (`clients/shared`) in a pnpm workspace. They are HTTP
-  clients of the shell API and import nothing from the backend, so
+- `clients/` are the sample user apps: `chat_1` to `chat_5` plus `all`, six React
+  pages built from one shared package (`clients/shared`) in a pnpm workspace. They
+  are HTTP clients of the shell API and import nothing from the backend, so
   `node clients/chat_1/server.js` runs from a clone with no repo config at all.
   `chat_1` carries the priority and burst controls, `chat_2` the multi-line
-  transcript input and token counter; the rest are plain chat.
+  transcript input and token counter, `chat_3` to `chat_5` are plain chat, and
+  `all` embeds all five on one page. Each page sends its own name as `mfeId`, so
+  the scheduler counts them as separate clients.
 - `dashboard/` is the operator view. It also imports nothing from the backend, but
   it does read `$EDGE_STATE_DIR`, so it has to run on the same host.
 
@@ -194,7 +195,7 @@ api-server or any worker starts (`Supervisor::waitForModelReady`, 30 s timeout).
 
 ### The request path
 
-`Browser MFE (:5001/:5002)` → `shell-app (:3000)` → `api-server (:11434)` → `worker (unix socket)` → `llama`
+`Browser MFE (:5000-:5005)` → `shell-app (:3000)` → `api-server (:11434)` → `worker (unix socket)` → `llama`
 
 Concurrency is limited in **two independent places**, configured separately:
 
@@ -209,18 +210,19 @@ agent then rejects. `EDGE_MAX_PER_MFE` must be strictly less than `EDGE_MAX_SLOT
 rule is inert: equal values let one MFE hold every slot. Shipped values are 4 slots, 4 workers,
 2 per MFE.
 
-**Known limitation: the JS side never learns the effective worker count.** Capacity planning
-clamps how many workers actually start — `placeableWorkerCount` in
-`backend/hardware/capacityPlan.cpp`, which `Supervisor::startWorkers` counts to — but the
-api-server reads `EDGE_WORKER_COUNT` straight from the env (`backend/api-server/server.js:122`)
-and pre-creates that many pool entries (`backend/api-server/ipc.js:36`). The supervisor does
-write what actually started into the model-config JSON (`Supervisor::writeModelConfig`, as
-`workerCount` beside `configuredWorkerCount`), but nothing in the Node code reads that file.
-So on a RAM-constrained host the pool holds entries for workers that were never started. It
-degrades safely — a pool entry whose socket is absent never becomes ready, so it is not handed
-out — but the failure shape is wrong: the scheduler admits a request against a slot count that
-assumes the ceiling, and the api-server then answers 503 `no_ready_workers` instead of the
-request queueing. Not fixed; wiring the effective count into `WorkerPool` is the fix.
+**The pool now sizes itself from the effective count; the scheduler still does not.**
+Capacity planning clamps how many workers actually start (`placeableWorkerCount` in
+`backend/hardware/capacityPlan.cpp`, which `Supervisor::startWorkers` counts to), and the
+supervisor writes that into the model-config JSON as `workerCount` beside
+`configuredWorkerCount` (`Supervisor::writeModelConfig`). `backend/api-server/workerCountSource.js`
+reads it back and `WorkerPool` pre-creates that many entries
+(`backend/api-server/server.js:123`), falling back to the env ceiling on any error: no file,
+bad JSON, a non-integer, or a count above the ceiling it was derived from. Every failure there
+is a fallback and never a throw, because the api-server has to boot standalone.
+
+**Still open:** the shell's scheduler cannot learn that number. `EDGE_MAX_SLOTS` above the
+workers that really started admits work the api-server then refuses with 503
+`no_ready_workers`, instead of the request queueing.
 
 `starting` is not a resting state. A pool entry whose socket has not appeared within
 `EDGE_WORKER_STARTUP_GRACE_MS` is marked `crashed` and handed to the ordinary recovery probe, so a
@@ -256,8 +258,11 @@ library: the worker extracts fields with `std::regex` (`backend/inference-worker
 builds replies by string concatenation with a hand-rolled `jsonEscape`. Adding a field to a worker
 message means touching both the extractor and the emitter.
 
-- `$EDGE_SUPERVISOR_SOCK` — workers heartbeat here every 50 ms; the supervisor currently only drains
-  and discards them (`drainSupervisorSocket`), so heartbeats are not yet a liveness signal.
+- `$EDGE_SUPERVISOR_SOCK` — workers heartbeat here every 50 ms with their status and `busyMs`.
+  `drainSupervisorSocket` parses each line and calls `recordHeartbeat`, and `checkWorkerLiveness`
+  runs on the same 50 ms tick: a worker silent past `EDGE_WORKER_HEARTBEAT_TIMEOUT_MS`, or whose
+  `busyMs` passes `EDGE_WORKER_STUCK_REQUEST_MS`, is SIGKILLed into the ordinary crash path.
+  Logic in `backend/supervisor/workerLiveness.{h,cpp}`, so it is testable with no socket.
 - `$EDGE_API_NOTIFY_SOCK` — supervisor → api-server crash notifications. Drives
   `WorkerPool._markWorkerCrashed`, which fails in-flight requests with 503 + `Retry-After`.
 - `$EDGE_WORKER_SOCKET_PREFIX<id>.sock` — api-server → worker, one connection per request.
@@ -273,7 +278,7 @@ worker is started with).
 The order is discovery, capacity, assignment, startup. Discovery runs in a short-lived
 `edge-inference-worker --probe-hardware` child, because reaching a `ggml_backend_dev_t`
 builds the ggml registry and that initializes CUDA — a cost the supervisor must not pay,
-since llama.cpp b9180 has no way to release a CUDA primary context in-process. **The
+since llama.cpp at `e85caa81` has no way to release a CUDA primary context in-process. **The
 supervisor must keep linking only `rt`.** Do not give it llama.
 
 `EDGE_WORKER_COUNT` is a ceiling, not a promise. `placeableWorkerCount` decides how much of
@@ -319,8 +324,9 @@ tier, so the tier the ladder falls to keeps answering and a respawned worker is 
 
 `backend/api-server/requestRegistry.js` coalesces concurrent submissions of one `requestId` onto a single
 inference run, and caches successful results for `EDGE_IDEMPOTENCY_TTL_MS`. Failures are
-deliberately **not** cached, or a client could never retry that id. Both MFEs retry with the same
-id on purpose (`clients/*/public/retry.js`), which is what makes the cache useful.
+deliberately **not** cached, or a client could never retry that id. Every page retries with the same
+id on purpose (`clients/shared/src/lib/retry.js`, shared by every page), which is what makes
+the cache useful.
 
 The set of open requests is written to `$EDGE_INFLIGHT_PATH` (temp file plus rename) and read back
 at boot, surfacing under `/health` as `requests.orphanedFromPreviousRun`. It replaced
@@ -341,7 +347,7 @@ start workers against a segment the new model-cache was still zero-filling; ever
 reserved bytes, so `SharedModelHeader` is still 256 bytes and every older field kept its offset.
 
 Each worker validates that header, mmaps the segment, then
-**repoints its own model path at `/dev/shm/...`** (`backend/inference-worker/worker.cpp:231-234`) so llama
+**repoints its own model path at `/dev/shm/...`** (`backend/inference-worker/worker.cpp:283`) so llama
 loads from shared memory rather than disk. This is what makes a worker restart cheaper than a cold
 start, and why N workers don't cost N × 2.3 GB.
 
@@ -355,6 +361,20 @@ the same variables through `backend/ipc/paths.h`.
 Consequence: a new config value must be added to `.env.example` (tracked), not just `.env`
 (gitignored), or a fresh clone crashes at startup. `scripts/backend.sh` keeps its own explicit
 required-variable list that also needs updating.
+
+## Docs
+
+24 documents under `docs/`, entry point `docs/main_docs.md`. Numbered `01` to `21` by area, plus
+`build-matrix.md` (why one binary cannot hold CUDA, Metal and Hexagon) and `device-fallback.md`
+(the Qualcomm and Apple paths, and the vendor error tables).
+
+`docs/diagrams/` holds the Eraser sources (`.eraser`) and their rendered PNGs: one architecture
+diagram and three sequence diagrams (token stream, worker crash, client disconnect). The `.eraser`
+files are DSL, and the sequence ones only parse in a Sequence diagram, not the architecture canvas.
+`docs/diagrams/previews/` holds dashboard and client screenshots used in the README.
+
+Keeping these current matters: the README links into them, and stale line numbers there are worse
+than none.
 
 ## Gotchas
 
