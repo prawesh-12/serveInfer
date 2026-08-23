@@ -17,6 +17,17 @@ void signalHandler(int) {
   }
 }
 
+bool parseLongLongArg(const std::string& raw, long long& out) {
+  try {
+    out = std::stoll(raw);
+    return true;
+  } catch (const std::invalid_argument&) {
+    return false;
+  } catch (const std::out_of_range&) {
+    return false;
+  }
+}
+
 bool parseIntArg(const std::string& raw, int& out) {
   try {
     out = std::stoi(raw);
@@ -47,6 +58,35 @@ int main(int argc, char** argv) {
   }
   if (const char* modelEnv = std::getenv("EDGE_MODEL_PATH")) {
     config.modelPath = modelEnv;
+  }
+
+  // Optional, unlike the rest of the config: an .env missing these still boots on the defaults.
+  if (const char* value = std::getenv("EDGE_GPU_RESERVE_MB")) {
+    parseLongLongArg(value, config.capacity.gpuReserveMb);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_GPU_MB")) {
+    parseLongLongArg(value, config.capacity.workerGpuMb);
+  }
+  if (const char* value = std::getenv("EDGE_RAM_RESERVE_MB")) {
+    parseLongLongArg(value, config.capacity.ramReserveMb);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_RAM_MB")) {
+    parseLongLongArg(value, config.capacity.workerRamMb);
+  }
+  if (const char* value = std::getenv("EDGE_HW_PROBE_TIMEOUT_MS")) {
+    parseIntArg(value, config.hardwareProbeTimeoutMs);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_HEARTBEAT_GRACE_MS")) {
+    parseLongLongArg(value, config.liveness.startupGraceMs);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_HEARTBEAT_TIMEOUT_MS")) {
+    parseLongLongArg(value, config.liveness.heartbeatTimeoutMs);
+  }
+  if (const char* value = std::getenv("EDGE_WORKER_STUCK_REQUEST_MS")) {
+    parseLongLongArg(value, config.liveness.stuckRequestMs);
+  }
+  if (const char* value = std::getenv("EDGE_MEMINFO_PATH")) {
+    config.meminfoPath = value;
   }
 
   for (int i = 1; i < argc; ++i) {

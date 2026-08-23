@@ -32,9 +32,6 @@ bool anyPathReadable(const char* const* paths, std::size_t count) {
 }
 
 #if defined(_WIN32)
-// A tier is not usable just because a file is on disk. The DLL has to load.
-// A half-installed vendor runtime is what turns into a device fault on the
-// first inference, instead of a clean refusal at startup.
 bool libraryLoads(const char* name) {
   HMODULE handle = LoadLibraryA(name);
   if (handle == nullptr) {
@@ -45,13 +42,9 @@ bool libraryLoads(const char* name) {
 }
 #endif
 
-// ---------------------------------------------------------------- CPU
-
 ProbeResult probeCpu() {
   return ProbeResult::kAvailable;
 }
-
-// ---------------------------------------------------------------- Linux
 
 ProbeResult probeCuda() {
 #if defined(__linux__)
@@ -92,14 +85,6 @@ ProbeResult probeVulkan() {
 #endif
 }
 
-// ------------------------------------------------- Windows on ARM64 (A3)
-
-// Qualcomm Hexagon NPU, reached through the QNN SDK.
-//
-// Two things have to be true. The HTP backend library has to load, and DXCore
-// has to find a compute adapter. Checking only the library is the mistake that
-// makes ERROR_DEVICE_REMOVED look like a surprise mid-inference, when really
-// the device was never there.
 ProbeResult probeNpu() {
 #if defined(_WIN32)
   if (!libraryLoads("QnnHtp.dll")) {
@@ -108,16 +93,13 @@ ProbeResult probeNpu() {
   if (!libraryLoads("dxcore.dll")) {
     return ProbeResult::kRuntimeMissing;
   }
-  // A full check would call DXCoreCreateAdapterFactory and ask for
-  // DXCORE_ADAPTER_ATTRIBUTE_D3D12_GENERIC_ML. Loading dxcore is as far as we
-  // can go without linking the D3D12 headers into this worker.
+  // Optimistic: a full check needs DXCoreCreateAdapterFactory and the D3D12 headers.
   return ProbeResult::kAvailable;
 #else
   return ProbeResult::kWrongPlatform;
 #endif
 }
 
-// DirectML is the middle tier on Windows. Slower than the NPU, still on-device.
 ProbeResult probeDirectMl() {
 #if defined(_WIN32)
   if (!libraryLoads("DirectML.dll")) {
@@ -129,13 +111,9 @@ ProbeResult probeDirectMl() {
 #endif
 }
 
-// ------------------------------------------------------------ macOS (A4)
-
 ProbeResult probeAne() {
 #if defined(__APPLE__)
-  // The ANE is reached through Core ML, and only Apple silicon has one. An
-  // Intel Mac has the framework but no Neural Engine behind it. So we check for
-  // both the framework and the hardware service.
+  // An Intel Mac has Core ML but no Neural Engine, so the framework alone is not enough.
   static const char* framework[] = {"/System/Library/Frameworks/CoreML.framework/CoreML"};
   if (!anyPathReadable(framework, 1)) {
     return ProbeResult::kRuntimeMissing;
@@ -166,17 +144,14 @@ ProbeResult probeAccelerate() {
 #endif
 }
 
-// ----------------------------------------------------------------- Remote
+bool envIsSet(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0';
+}
 
-// The remote tier is last on every ladder, and off unless you turn it on.
-//
-// Falling back to a cloud API means the user's transcript leaves the device.
-// That is a policy decision. An on-device runtime should not make it on its own
-// just because a driver hiccuped. So this needs an endpoint and an explicit
-// opt-in, not one or the other.
+// A credential sitting in the environment is not consent, so the opt-in stays its own variable.
 ProbeResult probeRemote() {
-  const char* endpoint = std::getenv("EDGE_REMOTE_ENDPOINT");
-  if (endpoint == nullptr || endpoint[0] == '\0') {
+  if (!envIsSet("EDGE_SARVAM_API_KEY") && !envIsSet("EDGE_REMOTE_ENDPOINT")) {
     return ProbeResult::kRuntimeMissing;
   }
   const char* allow = std::getenv("EDGE_REMOTE_FALLBACK_ALLOWED");
@@ -191,13 +166,13 @@ const DeviceBackend kBackends[] = {
     {"cuda", "linux", "/dev/nvidia*, nvcuda.dll", "NVIDIA GPU", probeCuda},
     {"rocm", "linux", "/dev/kfd", "AMD GPU", probeRocm},
     {"vulkan", "any", "libvulkan", "portable GPU compute", probeVulkan},
-    {"npu", "windows", "QnnHtp.dll, dxcore.dll", "Qualcomm Hexagon NPU (A3)", probeNpu},
+    {"npu", "windows", "QnnHtp.dll, dxcore.dll", "Qualcomm Hexagon NPU", probeNpu},
     {"directml", "windows", "DirectML.dll, d3d12.dll", "Windows GPU tier below the NPU", probeDirectMl},
     {"gpu", "windows", "DirectML.dll, d3d12.dll", "alias for directml", probeDirectMl},
-    {"ane", "macos", "CoreML.framework", "Apple Neural Engine (A4)", probeAne},
+    {"ane", "macos", "CoreML.framework", "Apple Neural Engine", probeAne},
     {"metal", "macos", "Metal.framework", "Apple GPU tier", probeMetal},
     {"accelerate", "macos", "Accelerate.framework", "Apple CPU tier", probeAccelerate},
-    {"remote", "any", "EDGE_REMOTE_ENDPOINT", "cloud API, opt-in only", probeRemote},
+    {"remote", "any", "EDGE_SARVAM_API_KEY", "cloud API, opt-in only", probeRemote},
 };
 
 constexpr std::size_t kBackendCount = sizeof(kBackends) / sizeof(kBackends[0]);
@@ -246,22 +221,6 @@ std::vector<std::string> knownBackends() {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Vendor error code translation.
-//
-// You can read and test all of this on any machine, so none of it sits behind a
-// platform #if. Give it the code the vendor API returned. It answers the one
-// question the ladder cares about. Is this tier gone for the session? Is it
-// only unable to run this one graph? Or did something transient go wrong?
-//
-// A note on accuracy. The DXGI and Win32 constants below are stable documented
-// values, so they are written out here. The QNN and Core ML numbers are not.
-// Guessing an SDK constant is worse than leaving it out. Those two functions
-// dispatch on values that a Windows ARM64 or macOS build must take from the
-// real vendor header. The mapping itself is the design decision, and it is
-// complete and tested.
-// ---------------------------------------------------------------------------
-
 namespace {
 constexpr unsigned long kDxgiDeviceRemoved = 0x887A0005ul;
 constexpr unsigned long kDxgiDeviceHung = 0x887A0006ul;
@@ -280,9 +239,7 @@ DeviceFault faultFromDxgiStatus(unsigned long status) {
   switch (status) {
     case 0ul:
       return DeviceFault::kNone;
-    // You cannot trust a removed or hung adapter again in this process. The old
-    // device object stays invalid even after a driver reset. That is why the
-    // assignment calls this unrecoverable for the session.
+    // The old device object stays invalid even after a driver reset.
     case kDxgiDeviceRemoved:
     case kDxgiDeviceHung:
     case kDxgiDeviceReset:
@@ -310,8 +267,7 @@ DeviceFault faultFromWindowsError(unsigned long code) {
     case kWinErrorGenFailure:
       return DeviceFault::kRuntimeError;
     default:
-      // A caller may pass an HRESULT to the Win32 mapper by mistake. Send it to
-      // the DXGI mapper instead of calling a removed device a generic error.
+      // An HRESULT passed to the Win32 mapper by mistake.
       if ((code & 0xFFFF0000ul) == 0x887A0000ul) {
         return faultFromDxgiStatus(code);
       }
@@ -319,15 +275,10 @@ DeviceFault faultFromWindowsError(unsigned long code) {
   }
 }
 
-// Qualcomm QNN. `status` is a QnnStatus, and zero means success.
-// The family numbers come from QnnCommon.h on the target SDK.
 DeviceFault faultFromQnnStatus(long status) {
   if (status == 0) {
     return DeviceFault::kNone;
   }
-  // QNN groups errors into families by their base number. Graph, backend,
-  // device, memory. Only the device family means the accelerator is gone. The
-  // rest are software failures, and a lower tier can retry them.
   const long family = status / 1000 * 1000;
   switch (family) {
     case 5000:  // QNN_DEVICE_ERROR family
@@ -339,9 +290,7 @@ DeviceFault faultFromQnnStatus(long status) {
   }
 }
 
-// CoreMedia OSStatus. This is the family kCMErrorUnsupportedOperation belongs
-// to. Apple keeps them in the -12000 range. The whole family means "this
-// operation, on this object". None of them means the hardware is gone.
+// The -12000 family means "this operation, on this object", never a missing device.
 DeviceFault faultFromCoreMediaStatus(long status) {
   if (status == 0) {
     return DeviceFault::kNone;
@@ -352,9 +301,73 @@ DeviceFault faultFromCoreMediaStatus(long status) {
   return DeviceFault::kRuntimeError;
 }
 
-// Core ML MLModelError. A model that will not compile for the ANE stays that
-// way, but that says nothing about the device. So we quarantine the tier rather
-// than kill it. A different model may run there fine.
+// Nothing maps to kRemoved, or a passing 503 would make remote session-fatal.
+DeviceFault faultFromRemoteStatus(long status) {
+  if (status >= 200 && status < 300) {
+    return DeviceFault::kNone;
+  }
+  if (status == 0) {
+    return DeviceFault::kRuntimeError;
+  }
+  switch (status) {
+    case 400:
+    case 413:
+    case 415:
+    case 422:
+      return DeviceFault::kUnsupportedOp;
+    case 401:
+    case 403:
+    case 404:
+      return DeviceFault::kUnavailable;
+    default:
+      return DeviceFault::kRuntimeError;
+  }
+}
+
+namespace {
+std::string backendClassName(const std::string& tier) {
+  if (tier == "cpu" || tier == "accelerate") {
+    return "CPU";
+  }
+  if (tier == "cuda" || tier == "rocm" || tier == "vulkan" || tier == "directml" ||
+      tier == "gpu" || tier == "metal") {
+    return "GPU";
+  }
+  if (tier == "npu") {
+    return "NPU";
+  }
+  if (tier == "ane") {
+    return "ANE";
+  }
+  if (tier == "remote") {
+    return "REMOTE";
+  }
+  std::string upper = tier;
+  for (char& ch : upper) {
+    if (ch >= 'a' && ch <= 'z') {
+      ch = static_cast<char>(ch - 'a' + 'A');
+    }
+  }
+  return upper.empty() ? "UNKNOWN" : upper;
+}
+}  // namespace
+
+std::string backendAvailabilityState(const std::string& tier, ProbeResult probe,
+                                     DeviceFault lastFault, bool quarantined, bool sessionFatal) {
+  const std::string prefix = backendClassName(tier);
+  const bool benched = quarantined || sessionFatal;
+  if (benched && lastFault == DeviceFault::kUnsupportedOp) {
+    return prefix + "_UNSUPPORTED";
+  }
+  if (benched) {
+    return prefix + "_UNHEALTHY";
+  }
+  if (probe == ProbeResult::kAvailable) {
+    return prefix + "_AVAILABLE";
+  }
+  return prefix + "_UNAVAILABLE";
+}
+
 DeviceFault faultFromCoreMlError(long code) {
   if (code == 0) {
     return DeviceFault::kNone;

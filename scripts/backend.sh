@@ -1,6 +1,4 @@
 #!/bin/bash
-# The inference runtime: supervisor (which owns model-cache, api-server and the
-# worker pool) plus the shell API. Nothing here serves a browser.
 set -euo pipefail
 
 TIER=backend
@@ -25,7 +23,7 @@ require_env \
   EDGE_MAX_SLOTS EDGE_MAX_PER_MFE EDGE_MAX_QUEUE EDGE_AGING_MS \
   EDGE_QUEUE_TIMEOUT_MS EDGE_DEFAULT_JOB_MS EDGE_EXEC_TIMEOUT_MS \
   EDGE_DONE_TTL_MS EDGE_DONE_MAX_ENTRIES EDGE_WORKER_CONNECT_TIMEOUT_MS \
-  EDGE_WORKER_RECOVERY_MS EDGE_WORKER_RECOVERY_ATTEMPTS \
+  EDGE_WORKER_RECOVERY_MS EDGE_WORKER_RECOVERY_ATTEMPTS EDGE_WORKER_STARTUP_GRACE_MS \
   EDGE_IDEMPOTENCY_TTL_MS EDGE_INFLIGHT_PATH \
   EDGE_DEVICE_LADDER EDGE_DEVICE_QUARANTINE_MS EDGE_DEVICE_PROBE_INTERVAL_MS \
   EDGE_SHM_NAME EDGE_SUPERVISOR_SOCK EDGE_API_NOTIFY_SOCK EDGE_WORKER_SOCKET_PREFIX \
@@ -57,7 +55,7 @@ fi
 
 require_free_port "$EDGE_API_PORT" "api-server"
 require_free_port "$EDGE_SHELL_PORT" "shell-app"
-mkdir -p "$EDGE_STATE_DIR"
+mkdir -p "$EDGE_STATE_DIR" "$EDGE_LOG_DIR"
 
 export EDGE_MODEL_PATH="$MODEL_PATH"
 
@@ -83,5 +81,5 @@ echo ""
 echo "  shell API:  http://127.0.0.1:$EDGE_SHELL_PORT"
 echo "  agent API:  http://127.0.0.1:$EDGE_API_PORT"
 echo "  workers:    $EDGE_WORKER_COUNT   slots: $EDGE_MAX_SLOTS   per client: $EDGE_MAX_PER_MFE"
-echo "  logs:       $EDGE_STATE_DIR/backend-*.log"
+echo "  logs:       $EDGE_LOG_DIR/backend-*.log"
 echo ""

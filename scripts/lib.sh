@@ -1,8 +1,4 @@
 # Shared helpers for the three tier scripts. Source this, do not run it.
-#
-# Every process registers itself as $EDGE_STATE_DIR/<tier>-<name>.pid. That
-# directory is the process list the dashboard reads, and the glob each tier's
-# stop uses so it never touches another tier's processes.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -16,6 +12,18 @@ load_env() {
       set +a
     fi
   done
+
+  # Defaulted rather than required, so an .env written before it existed still boots.
+  EDGE_LOG_DIR="${EDGE_LOG_DIR:-$ROOT/logs}"
+  # Resolved against the repo root, so the path means the same from any cwd.
+  [[ "$EDGE_LOG_DIR" != /* ]] && EDGE_LOG_DIR="$ROOT/${EDGE_LOG_DIR#./}"
+  export EDGE_LOG_DIR
+
+  # The supervisor opens this by the raw value, so it has to be absolute: it is
+  # the one log written by C++ rather than by spawn().
+  EDGE_CRASH_LOG="${EDGE_CRASH_LOG:-$EDGE_LOG_DIR/edge-crash.log}"
+  [[ "$EDGE_CRASH_LOG" != /* ]] && EDGE_CRASH_LOG="$ROOT/${EDGE_CRASH_LOG#./}"
+  export EDGE_CRASH_LOG
 }
 
 require_env() {
@@ -62,8 +70,8 @@ register() {
 spawn() {
   local name="$1"
   shift
-  mkdir -p "$EDGE_STATE_DIR"
-  local logfile="$EDGE_STATE_DIR/$name.log"
+  mkdir -p "$EDGE_LOG_DIR"
+  local logfile="$EDGE_LOG_DIR/$name.log"
   "$@" > "$logfile" 2>&1 &
   local pid=$!
   register "$name" "$pid"

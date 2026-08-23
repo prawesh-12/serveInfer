@@ -1,4 +1,3 @@
-# Build outputs
 /build/
 **/build/
 CMakeFiles/
@@ -7,10 +6,10 @@ cmake_install.cmake
 compile_commands.json
 .cache
 
-# Dependencies
 node_modules/
+clients/*/dist/
+dashboard/dist/
 
-# Python virtualenv/cache
 venv/
 .venv/
 __pycache__/
@@ -25,7 +24,9 @@ __pycache__/
 .env.*
 !.env.example
 
-# Model weights
+logs/*
+!logs/.gitkeep
+
 *.gguf
 backend/models/*
 !backend/models/.gitkeep
@@ -44,12 +45,17 @@ vgcore.*
 
 extras/
 
-# Merge leftovers
+# An upstream llama.cpp checkout kept here for comparison against the vendored
+# copy. It carries its own .git and must never be committed into this repo.
+main-llama.cpp/
+
 *.orig
 *.rej
 
-# Editor and OS
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# diagrams
+*.eraser

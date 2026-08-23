@@ -1,8 +1,10 @@
 #include "model_cache.h"
 
+#include "../ipc/modelReady.h"
 #include "../ipc/paths.h"
 
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -16,7 +18,8 @@ void signalHandler(int) {
 }
 
 void printUsage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " --model-path <path> [--shm-name <name>]\n";
+  std::cerr << "Usage: " << argv0
+            << " --model-path <path> [--shm-name <name>] [--run-nonce <n>]\n";
 }
 }  // namespace
 
@@ -42,6 +45,15 @@ int main(int argc, char** argv) {
       config.shmName = arg.substr(std::string("--shm-name=").size());
       continue;
     }
+    if (arg == "--run-nonce" && i + 1 < argc) {
+      config.runNonce = std::strtoull(argv[++i], nullptr, 10);
+      continue;
+    }
+    if (arg.rfind("--run-nonce=", 0) == 0) {
+      config.runNonce = std::strtoull(arg.substr(std::string("--run-nonce=").size()).c_str(),
+                                      nullptr, 10);
+      continue;
+    }
 
     std::cerr << "Unknown argument: " << arg << '\n';
     printUsage(argv[0]);
@@ -57,6 +69,11 @@ int main(int argc, char** argv) {
     std::cerr << "--shm-name is required (or set EDGE_SHM_NAME)\n";
     printUsage(argv[0]);
     return 1;
+  }
+  // Run by hand rather than by the supervisor: publish under a nonce of our own, which no
+  // supervisor is waiting on, rather than under 0, which every stale header already reads as.
+  if (config.runNonce == 0) {
+    config.runNonce = EdgeIPC::generateRunNonce();
   }
 
   ModelCache cache(config);

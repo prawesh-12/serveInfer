@@ -1,11 +1,7 @@
 #include "testHarness.h"
 
-// extractString and extractBool sit in an anonymous namespace inside
-// worker.cpp. Nothing outside that file can see them.
-//
-// So this test includes worker.cpp whole. That also means worker.cpp must NOT be
-// listed as a source of this build target. If it were, every symbol in it would
-// be defined twice and the link would fail.
+// Includes worker.cpp whole for its anonymous-namespace parsers, so worker.cpp must NOT
+// also be listed as a source of this target.
 #include "../worker.cpp"
 
 #include <string>
@@ -78,9 +74,6 @@ EDGE_TEST(json_punctuation_inside_a_prompt_is_kept,
 
 EDGE_TEST(regex_extraction_has_no_idea_about_nesting,
           "a key nested inside another object is read as if it were top level") {
-  // The worker parses frames with a regex, not a JSON library, so a nested key
-  // is read as if it were top level. Nothing sends nested frames today. This
-  // test records the limit so a future change does not hit it by surprise.
   const std::string frame = R"({"meta":{"requestId":"inner"},"requestId":"outer"})";
   CHECK_EQ(extracted(frame, "requestId"), std::string("inner"));
 }
@@ -97,4 +90,53 @@ EDGE_TEST(booleans_are_read_and_default_when_absent,
 EDGE_TEST(a_quoted_boolean_is_not_a_boolean,
           "a string that says true is not accepted as a boolean") {
   CHECK_EQ(extractBool(R"({"stream":"true"})", "stream", false), false);
+}
+
+const std::vector<std::string> kShippedLadder{"cuda", "npu", "ane", "cpu", "remote"};
+
+EDGE_TEST(a_gpu_worker_keeps_the_whole_priority_order,
+          "a worker given a gpu slot tries cuda, then npu, then ane, then cpu, then remote") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, false, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(5));
+  CHECK_EQ(order[0], std::string("cuda"));
+  CHECK_EQ(order[1], std::string("npu"));
+  CHECK_EQ(order[2], std::string("ane"));
+  CHECK_EQ(order[3], std::string("cpu"));
+  CHECK_EQ(order[4], std::string("remote"));
+}
+
+EDGE_TEST(a_worker_with_no_gpu_slot_keeps_the_npu_and_the_ane,
+          "the supervisor rations only cuda, so the other accelerators stay reachable") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, true, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(4));
+  CHECK_EQ(order[0], std::string("npu"));
+  CHECK_EQ(order[1], std::string("ane"));
+  CHECK_EQ(order[2], std::string("cpu"));
+  CHECK_EQ(order[3], std::string("remote"));
+}
+
+EDGE_TEST(force_cpu_drops_every_local_accelerator,
+          "EDGE_FORCE_CPU leaves only the cpu and the cloud rung below it") {
+  const std::vector<std::string> order = ladderFrom(kShippedLadder, false, true);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(order[0], std::string("cpu"));
+  CHECK_EQ(order[1], std::string("remote"));
+}
+
+EDGE_TEST(remote_is_always_the_last_rung,
+          "the cloud fallback never sits above a local tier, whatever was dropped") {
+  for (const bool noGpuSlot : {false, true}) {
+    for (const bool forceCpu : {false, true}) {
+      const std::vector<std::string> order = ladderFrom(kShippedLadder, noGpuSlot, forceCpu);
+      CHECK_EQ(order.back(), std::string("remote"));
+    }
+  }
+}
+
+EDGE_TEST(a_ladder_naming_no_cpu_still_gets_one,
+          "narrowing a ladder that never named the cpu still leaves a usable floor") {
+  const std::vector<std::string> order = ladderFrom({"cuda", "npu"}, true, false);
+  CHECK_EQ(order.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(order[0], std::string("npu"));
+  CHECK_EQ(order[1], std::string("cpu"));
 }

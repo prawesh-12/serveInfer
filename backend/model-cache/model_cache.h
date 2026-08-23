@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 
+// runNonce and the padding before it come out of the old reserved[219]; the header is still
+// 256 bytes, so a build that predates the nonce reads the same offsets for everything else.
 struct SharedModelHeader {
   char magic[8];
   std::uint64_t modelSize;
@@ -12,14 +14,20 @@ struct SharedModelHeader {
   std::int64_t loadedAt;
   std::uint32_t version;
   std::uint8_t ready;
-  std::uint8_t reserved[219];
+  std::uint8_t pad[3];
+  std::uint64_t runNonce;
+  std::uint8_t reserved[208];
 };
 
 static_assert(sizeof(SharedModelHeader) == 256, "SharedModelHeader must be 256 bytes");
+static_assert(offsetof(SharedModelHeader, runNonce) == 40, "runNonce must stay at offset 40");
+
+constexpr std::uint32_t kSharedModelHeaderVersion = 2;
 
 struct ModelCacheConfig {
   std::string modelPath;
   std::string shmName;
+  std::uint64_t runNonce = 0;
 };
 
 class ModelCache {
@@ -36,6 +44,7 @@ class ModelCache {
 
   bool openModelFile(std::size_t& modelSize);
   bool createSharedMemory(std::size_t modelSize);
+  void claimHeader();
   bool loadModelIntoSharedMemory(std::size_t modelSize);
   void cleanup();
 

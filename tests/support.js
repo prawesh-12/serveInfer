@@ -1,9 +1,5 @@
 'use strict';
 
-// Shared helpers for the test suite. This file is not itself a test.
-
-// A promise plus its settle functions, so a test can hold a job open and
-// release it exactly when it wants to.
 function deferred() {
   let resolve;
   let reject;
@@ -19,8 +15,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Polls until check() returns something truthy. Better than a fixed sleep,
-// because the test finishes the moment the condition holds.
 async function waitFor(check, { timeoutMs = 2000, stepMs = 5 } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -35,8 +29,6 @@ async function waitFor(check, { timeoutMs = 2000, stepMs = 5 } = {}) {
   }
 }
 
-// Rejects when the abort signal fires. That is what a well behaved job does.
-// A job that ignores abort is tested separately.
 function abortableJob(signal, { onStart } = {}) {
   onStart?.();
   return new Promise((_resolve, reject) => {

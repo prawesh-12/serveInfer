@@ -1,20 +1,23 @@
-'use strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
 
-const fs = require('node:fs');
-const http = require('node:http');
-const path = require('node:path');
 // Imports nothing from the backend. Every value has a default, so this runs
 // standalone against a local stack.
-const publicDir = path.join(__dirname, 'public');
+const distDir = path.join(import.meta.dirname, 'dist');
 const port = Number(process.env.DASHBOARD_PORT || 3001);
 const shellBase = process.env.SHELL_API_BASE || 'http://127.0.0.1:3000';
 const apiBase = process.env.AGENT_API_BASE || 'http://127.0.0.1:11434';
 const stateDir = process.env.EDGE_STATE_DIR || '/tmp/edge-runtime';
+const modelConfigPath = process.env.EDGE_MODEL_CONFIG_PATH || '/tmp/edge-model-config.json';
 
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
 };
 
 function send(res, status, body, contentType = 'application/json; charset=utf-8') {
@@ -53,9 +56,8 @@ function getJson(url, timeoutMs = 1200) {
   });
 }
 
-// $EDGE_STATE_DIR is the process list. Every process writes <name>.pid on start
-// and removes it on exit, so a new client joins by writing one file and nothing
-// here changes. The name prefix carries the tier.
+// $EDGE_STATE_DIR is the process list: every process writes <name>.pid on start
+// and removes it on exit, and the name prefix carries the tier.
 function tierOf(name) {
   if (name.startsWith('backend-')) return { tier: 'backend', label: name.slice('backend-'.length) };
   if (name.startsWith('client-')) return { tier: 'clients', label: name.slice('client-'.length) };
@@ -124,6 +126,15 @@ function readRegistry() {
   return { processes, stale, stateDir };
 }
 
+// Absent means no backend has booted since the file was cleared, not an error.
+function readModelConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(modelConfigPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 async function buildStatus() {
   const [scheduler, agent, api] = await Promise.all([
     getJson(`${shellBase}/api/health`),
@@ -141,6 +152,7 @@ async function buildStatus() {
     scheduler: scheduler.body || null,
     agent: agent.body || null,
     registry,
+    modelConfig: readModelConfig(),
   };
 }
 
@@ -163,16 +175,28 @@ function serveStatic(req, res) {
     return;
   }
 
+  if (!fs.existsSync(distDir)) {
+    send(res, 503, 'dashboard is not built: run "pnpm build" in dashboard', 'text/plain; charset=utf-8');
+    return;
+  }
+
   const pathname = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
-  const filePath = path.normalize(path.join(publicDir, pathname));
-  if (!filePath.startsWith(publicDir)) {
+  const filePath = path.normalize(path.join(distDir, pathname));
+  if (!filePath.startsWith(distDir)) {
     send(res, 403, 'forbidden', 'text/plain; charset=utf-8');
     return;
   }
 
   fs.readFile(filePath, (err, content) => {
     if (err) {
-      send(res, 404, 'not_found', 'text/plain; charset=utf-8');
+      // Unknown paths are SPA routes, so the built index.html has to answer them.
+      fs.readFile(path.join(distDir, 'index.html'), (fallbackErr, html) => {
+        if (fallbackErr) {
+          send(res, 404, 'not_found', 'text/plain; charset=utf-8');
+          return;
+        }
+        send(res, 200, html, contentTypes['.html']);
+      });
       return;
     }
     send(res, 200, content, contentTypes[path.extname(filePath)] || 'application/octet-stream');

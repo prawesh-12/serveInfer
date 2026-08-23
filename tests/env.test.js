@@ -10,12 +10,8 @@ const vm = require('node:vm');
 const envSourcePath = path.join(__dirname, '..', 'backend', 'config', 'env.js');
 const tempDirs = [];
 
-// Three things make config/env.js awkward to test. parseEnvLine is private. It
-// reads the real repo root. And it caches after the first load.
-//
-// So each test compiles the source itself and passes in its own `process` and
-// `__dirname`. That gives a fresh module pointed at a throwaway directory. The
-// real file and this process's environment are left alone.
+// Each test compiles env.js itself with its own `process` and `__dirname`: parseEnvLine is
+// private and the real module caches after the first load.
 function loadEnvModule({ rootDir, processEnv = {} } = {}) {
   const dir = rootDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'edge-env-'));
   if (!rootDir) {
@@ -78,7 +74,6 @@ test('parseEnvLine trims the key and value and strips one layer of quotes', () =
     key: 'EDGE_NAME',
     value: 'quoted value',
   });
-  // Only a matched pair is stripped, so a lone quote survives.
   assert.deepEqual(env.parseEnvLine('EDGE_NAME="unbalanced'), {
     key: 'EDGE_NAME',
     value: '"unbalanced',
@@ -135,8 +130,7 @@ test('loadEnv is a no-op when neither file exists, and requiredEnv then throws',
 });
 
 test('the repo .env.example carries every variable the shipped config reads', () => {
-  // .env is gitignored. If a new value is added there and nowhere else, a fresh
-  // clone crashes at startup. So the tracked example file must hold every key.
+  // .env is gitignored, so a value added only there crashes a fresh clone.
   const example = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
   const { env } = loadEnvModule();
   const keys = new Set(
@@ -167,9 +161,7 @@ test('the repo .env.example carries every variable the shipped config reads', ()
 });
 
 test('the shipped caps keep the per-MFE fairness rule meaningful', () => {
-  // If the two values are equal, one MFE can hold every slot. That is the case
-  // the brief forbids. And more slots than workers turns a queue wait into a
-  // 503, because the shell admits work the agent then refuses.
+  // Equal values let one MFE hold every slot; more slots than workers turns a queue wait into a 503.
   const example = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
   const { env } = loadEnvModule();
   const values = new Map(

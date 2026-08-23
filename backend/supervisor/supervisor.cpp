@@ -1,9 +1,13 @@
 #include "supervisor.h"
 
+#include "workerReassignment.h"
+
+#include "../ipc/modelReady.h"
 #include "../ipc/paths.h"
 #include "../model-cache/model_cache.h"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -13,6 +17,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -22,6 +27,12 @@
 #include <utility>
 
 namespace {
+long long nowEpochMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
 constexpr int kCircuitKeyModelCache = -1001;
 constexpr int kCircuitKeyApiServer = -1002;
 
@@ -76,6 +87,9 @@ Supervisor::~Supervisor() {
 }
 
 bool Supervisor::start() {
+  // Before any fork: every backend decision must be made while nothing can race for VRAM.
+  discoverHardware();
+
   if (!setupSupervisorSocket()) {
     return false;
   }
@@ -102,6 +116,7 @@ int Supervisor::monitorLoop() {
   while (running_.load()) {
     reapChildren();
     drainSupervisorSocket();
+    checkWorkerLiveness();
     std::this_thread::sleep_for(std::chrono::milliseconds(config_.pollIntervalMs));
   }
 
@@ -112,6 +127,149 @@ int Supervisor::monitorLoop() {
 
 void Supervisor::requestStop() {
   running_.store(false);
+}
+
+HardwareReport Supervisor::runHardwareProbeChild() const {
+  HardwareReport report;
+  report.ram = readHostMemory(config_.meminfoPath);
+
+  int pipeFds[2] = {-1, -1};
+  if (pipe(pipeFds) != 0) {
+    report.note = std::string("pipe for hardware probe failed: ") + std::strerror(errno);
+    return report;
+  }
+
+  const pid_t pid = fork();
+  if (pid < 0) {
+    close(pipeFds[0]);
+    close(pipeFds[1]);
+    report.note = std::string("fork for hardware probe failed: ") + std::strerror(errno);
+    return report;
+  }
+
+  if (pid == 0) {
+    close(pipeFds[0]);
+    dup2(pipeFds[1], STDOUT_FILENO);
+    close(pipeFds[1]);
+    const std::string binary = config_.workerBinary;
+    const std::string flag = "--probe-hardware";
+    char* argv[] = {const_cast<char*>(binary.c_str()), const_cast<char*>(flag.c_str()), nullptr};
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+
+  close(pipeFds[1]);
+  std::string output;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(std::max(0, config_.hardwareProbeTimeoutMs));
+  bool timedOut = false;
+  while (true) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (remaining.count() <= 0) {
+      timedOut = true;
+      break;
+    }
+    pollfd waiting{};
+    waiting.fd = pipeFds[0];
+    waiting.events = POLLIN;
+    const int ready = poll(&waiting, 1, static_cast<int>(remaining.count()));
+    if (ready < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    if (ready == 0) {
+      timedOut = true;
+      break;
+    }
+    char buffer[4096];
+    const ssize_t n = read(pipeFds[0], buffer, sizeof(buffer));
+    if (n > 0) {
+      output.append(buffer, static_cast<std::size_t>(n));
+      continue;
+    }
+    if (n == 0 || errno != EINTR) {
+      break;
+    }
+  }
+  close(pipeFds[0]);
+
+  if (timedOut) {
+    kill(pid, SIGKILL);
+  }
+  int status = 0;
+  waitpid(pid, &status, 0);
+
+  if (timedOut) {
+    report.note = "hardware probe timed out after " +
+                  std::to_string(config_.hardwareProbeTimeoutMs) + "ms";
+    return report;
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    report.note = "hardware probe exited " + statusToReason(status);
+    return report;
+  }
+
+  HardwareReport parsed;
+  if (!parseHardwareReport(output, parsed)) {
+    report.note = "hardware probe emitted output this build cannot parse";
+    return report;
+  }
+  // Overwrites the child's own reading: only this one can be pointed at a test fixture.
+  parsed.ram = report.ram;
+  return parsed;
+}
+
+void Supervisor::discoverHardware() {
+  hardware_ = runHardwareProbeChild();
+  config_.capacity.maxWorkers = config_.workerCount;
+  plan_ = planCapacity(hardware_, config_.capacity);
+  effectiveWorkerCount_ = placeableWorkerCount(plan_, config_.workerCount);
+  assignments_ = assignWorkers(plan_, effectiveWorkerCount_);
+
+  std::cerr << "[supervisor] discovery probeOk=" << (hardware_.probeOk ? "true" : "false")
+            << " gpus=" << hardware_.gpus.size() << " note=\"" << hardware_.note << "\"\n";
+  for (std::size_t i = 0; i < hardware_.gpus.size(); ++i) {
+    const GpuDevice& gpu = hardware_.gpus[i];
+    std::cerr << "[supervisor] discovery gpu position=" << i << " name=" << gpu.name
+              << " description=\"" << gpu.description
+              << "\" totalVramMb=" << bytesToMb(gpu.totalBytes)
+              << " freeVramMb=" << bytesToMb(gpu.freeBytes) << '\n';
+  }
+  std::cerr << "[supervisor] discovery gpuReserveMb=" << config_.capacity.gpuReserveMb
+            << " workerGpuMb=" << config_.capacity.workerGpuMb
+            << " usableGpuMb=" << plan_.usableGpuMb << " chosenGpu=\"" << plan_.gpuName
+            << "\" cudaVisibleDevice=" << plan_.gpuIndex
+            << " gpuWorkerCapacity=" << plan_.gpuWorkerCapacity << " reason=\"" << plan_.gpuReason
+            << "\"\n";
+  std::cerr << "[supervisor] discovery ramTotalMb=" << plan_.totalRamMb
+            << " ramAvailableMb=" << plan_.availableRamMb
+            << " ramReserveMb=" << config_.capacity.ramReserveMb
+            << " workerRamMb=" << config_.capacity.workerRamMb
+            << " cpuWorkerCapacity=" << plan_.cpuWorkerCapacity << " reason=\"" << plan_.cpuReason
+            << "\"\n";
+
+  const int placeable = plan_.gpuWorkerCapacity + plan_.cpuWorkerCapacity;
+  std::cerr << "[supervisor] discovery placeableWorkers=" << placeable << " configuredWorkers="
+            << config_.workerCount << " startingWorkers=" << effectiveWorkerCount_ << '\n';
+  if (effectiveWorkerCount_ < config_.workerCount) {
+    std::cerr << "[supervisor] discovery capacity holds " << placeable << " worker(s), so "
+              << (config_.workerCount - effectiveWorkerCount_)
+              << " of the " << config_.workerCount
+              << " configured will not be started\n";
+  }
+  if (placeable < 1) {
+    std::cerr << "[supervisor] discovery WARNING: the plan affords no worker at all; starting one "
+                 "anyway so the runtime can answer, but it is running below its budget\n";
+  }
+
+  for (const WorkerAssignment& assignment : assignments_) {
+    std::cerr << "[supervisor] assignment workerId=" << assignment.workerId
+              << " backend=" << workerBackendName(assignment.backend) << " reason=\""
+              << assignment.reason << "\"\n";
+  }
 }
 
 bool Supervisor::setupSupervisorSocket() {
@@ -147,12 +305,15 @@ bool Supervisor::setupSupervisorSocket() {
 }
 
 bool Supervisor::startModelCache() {
+  runNonce_ = EdgeIPC::generateRunNonce();
   const std::vector<std::string> args = {
       config_.modelCacheBinary,
       "--model-path",
       config_.modelPath,
       "--shm-name",
       config_.shmName,
+      "--run-nonce",
+      std::to_string(runNonce_),
   };
   const pid_t pid = forkExec(args);
   if (pid <= 0) {
@@ -165,7 +326,7 @@ bool Supervisor::startModelCache() {
   info.command = args;
   writePidFile(pidFileNameFor(info), pid);
   processesByPid_[pid] = std::move(info);
-  std::cerr << "[supervisor] started model-cache pid=" << pid << '\n';
+  std::cerr << "[supervisor] started model-cache pid=" << pid << " runNonce=" << runNonce_ << '\n';
   return true;
 }
 
@@ -173,33 +334,33 @@ bool Supervisor::waitForModelReady() const {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(config_.modelReadyTimeoutSeconds);
   const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
+  bool reportedForeignRun = false;
 
   while (running_.load() && std::chrono::steady_clock::now() < deadline) {
-    const int fd = shm_open(metaName.c_str(), O_RDONLY, 0666);
-    if (fd < 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      continue;
-    }
+    EdgeIPC::ModelReadyState state = EdgeIPC::ModelReadyState::kMalformed;
 
-    struct stat st {};
-    if (fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(SharedModelHeader))) {
-      void* mapped =
-          mmap(nullptr, sizeof(SharedModelHeader), PROT_READ, MAP_SHARED, fd, 0);
-      if (mapped != MAP_FAILED) {
-        const auto* header = static_cast<const SharedModelHeader*>(mapped);
-        const bool validMagic = std::memcmp(header->magic, "EDGE", 4) == 0;
-        const bool isReady = header->ready == 1;
-        munmap(mapped, sizeof(SharedModelHeader));
-        close(fd);
-        if (validMagic && isReady) {
-          return true;
+    const int fd = shm_open(metaName.c_str(), O_RDONLY, 0666);
+    if (fd >= 0) {
+      struct stat st {};
+      if (fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(SharedModelHeader))) {
+        void* mapped = mmap(nullptr, sizeof(SharedModelHeader), PROT_READ, MAP_SHARED, fd, 0);
+        if (mapped != MAP_FAILED) {
+          state = EdgeIPC::evaluateModelHeader(mapped, sizeof(SharedModelHeader), runNonce_);
+          munmap(mapped, sizeof(SharedModelHeader));
         }
-      } else {
-        close(fd);
       }
-    } else {
       close(fd);
     }
+
+    if (state == EdgeIPC::ModelReadyState::kReady) {
+      return true;
+    }
+    if (state == EdgeIPC::ModelReadyState::kForeignRun && !reportedForeignRun) {
+      reportedForeignRun = true;
+      std::cerr << "[supervisor] ignoring shared model metadata from another run, waiting for "
+                << "runNonce=" << runNonce_ << '\n';
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   return false;
@@ -229,7 +390,7 @@ bool Supervisor::startApiServer() {
 }
 
 bool Supervisor::startWorkers() {
-  for (int workerId = 0; workerId < config_.workerCount; ++workerId) {
+  for (int workerId = 0; workerId < effectiveWorkerCount_; ++workerId) {
     if (!startWorker(workerId)) {
       return false;
     }
@@ -251,7 +412,14 @@ bool Supervisor::startWorker(int workerId) {
       "--model-path",
       config_.modelPath,
   };
-  const pid_t pid = forkExec(args);
+
+  std::vector<std::pair<std::string, std::string>> env;
+  const WorkerAssignment* assignment = assignmentFor(workerId);
+  if (assignment != nullptr) {
+    env = workerBackendEnv(*assignment);
+  }
+
+  const pid_t pid = forkExec(args, env);
   if (pid <= 0) {
     return false;
   }
@@ -266,11 +434,24 @@ bool Supervisor::startWorker(int workerId) {
   writePidFile(pidFileNameFor(info), pid);
   processesByPid_[pid] = std::move(info);
   workerPidById_[workerId] = pid;
-  std::cerr << "[supervisor] started worker " << workerId << " pid=" << pid << '\n';
+  workerHealthById_[workerId] = WorkerHealth{nowEpochMs(), 0, 0};
+  std::cerr << "[supervisor] started worker " << workerId << " pid=" << pid << " backend="
+            << (assignment != nullptr ? workerBackendName(assignment->backend) : "unassigned")
+            << '\n';
   return true;
 }
 
-pid_t Supervisor::forkExec(const std::vector<std::string>& args) const {
+const WorkerAssignment* Supervisor::assignmentFor(int workerId) const {
+  for (const WorkerAssignment& assignment : assignments_) {
+    if (assignment.workerId == workerId) {
+      return &assignment;
+    }
+  }
+  return nullptr;
+}
+
+pid_t Supervisor::forkExec(const std::vector<std::string>& args,
+                           const std::vector<std::pair<std::string, std::string>>& env) const {
   if (args.empty()) {
     return -1;
   }
@@ -280,6 +461,9 @@ pid_t Supervisor::forkExec(const std::vector<std::string>& args) const {
     return -1;
   }
   if (pid == 0) {
+    for (const auto& entry : env) {
+      setenv(entry.first.c_str(), entry.second.c_str(), 1);
+    }
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
     for (const auto& arg : args) {
@@ -315,10 +499,15 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   removePidFile(pidFileNameFor(info));
   if (info.type == ProcessType::kWorker && info.workerId >= 0) {
     workerPidById_.erase(info.workerId);
+    workerHealthById_.erase(info.workerId);
   }
 
   const bool exitedNormally = WIFEXITED(status) && WEXITSTATUS(status) == 0;
   if (exitedNormally) {
+    return;
+  }
+
+  if (handleWorkerReassignment(info, status)) {
     return;
   }
 
@@ -369,6 +558,25 @@ void Supervisor::handleCrash(pid_t pid, int status) {
   }
 }
 
+// false means "not handled": the caller falls through to ordinary crash handling.
+bool Supervisor::handleWorkerReassignment(const ProcessInfo& info, int status) {
+  if (info.type != ProcessType::kWorker) {
+    return false;
+  }
+  const bool isReassignExit =
+      WIFEXITED(status) && WEXITSTATUS(status) == EdgeExit::kReassignCpu;
+
+  ReassignmentHooks hooks;
+  hooks.startWorker = [this](int workerId) { return startWorker(workerId); };
+  hooks.notifyCrash = [this](int workerId) { notifyApiServerWorkerCrash(workerId); };
+  hooks.notifyRestarted = [this](int workerId) { notifyApiServerWorkerRestarted(workerId); };
+
+  const ReassignmentOutcome outcome = applyWorkerReassignment(
+      assignments_, info.workerId, isReassignExit, running_.load(), hooks, std::cerr);
+
+  return outcome == ReassignmentOutcome::kRestarted;
+}
+
 void Supervisor::shutdownChildren() {
   if (processesByPid_.empty()) {
     return;
@@ -393,8 +601,6 @@ void Supervisor::shutdownChildren() {
     kill(entry.first, SIGKILL);
     waitpid(entry.first, nullptr, 0);
   }
-  // Leave no stale pidfiles behind, or the next dashboard poll lists children
-  // that are already gone.
   for (const auto& entry : processesByPid_) {
     removePidFile(pidFileNameFor(entry.second));
   }
@@ -421,7 +627,8 @@ void Supervisor::restartWorkersAfterModelCacheRestart() {
     workerPidById_.erase(pidIt);
   }
 
-  for (int workerId = 0; workerId < config_.workerCount; ++workerId) {
+  // The planned count, not the configured ceiling: capacity outlives a model-cache restart.
+  for (int workerId = 0; workerId < effectiveWorkerCount_; ++workerId) {
     if (workerPidById_.find(workerId) == workerPidById_.end()) {
       if (startWorker(workerId)) {
         notifyApiServerWorkerRestarted(workerId);
@@ -437,6 +644,38 @@ void Supervisor::cleanupSocket() {
   }
   if (!config_.supervisorSocketPath.empty()) {
     unlink(config_.supervisorSocketPath.c_str());
+  }
+}
+
+void Supervisor::recordHeartbeat(int workerId, long long busyMs) {
+  WorkerHealth& health = workerHealthById_[workerId];
+  health.lastHeartbeatMs = nowEpochMs();
+  health.busyMs = busyMs;
+}
+
+// waitpid only reports death. A worker that stops answering, or wedges on one request while its
+// heartbeat thread keeps ticking, is killed here so the ordinary crash path can restart it.
+void Supervisor::checkWorkerLiveness() {
+  const long long now = nowEpochMs();
+
+  for (const auto& [workerId, pid] : workerPidById_) {
+    auto it = workerHealthById_.find(workerId);
+    if (it == workerHealthById_.end()) {
+      continue;
+    }
+    const WorkerLiveness verdict = classifyWorker(now, it->second, config_.liveness);
+    if (verdict == WorkerLiveness::kHealthy || verdict == WorkerLiveness::kStarting) {
+      continue;
+    }
+
+    const long long silentMs = it->second.lastHeartbeatMs > 0 ? now - it->second.lastHeartbeatMs
+                                                              : now - it->second.spawnedAtMs;
+    std::cerr << "[supervisor] worker " << workerId << " is " << workerLivenessName(verdict)
+              << " (silent " << silentMs << "ms, busy " << it->second.busyMs
+              << "ms); killing it so it can be restarted\n";
+    kill(pid, SIGKILL);
+    it->second.lastHeartbeatMs = now;
+    it->second.busyMs = 0;
   }
 }
 
@@ -457,10 +696,12 @@ void Supervisor::drainSupervisorSocket() {
       return;
     }
 
+    std::string pending;
     char buffer[2048];
     while (true) {
       const ssize_t n = read(clientFd, buffer, sizeof(buffer));
       if (n > 0) {
+        pending.append(buffer, static_cast<std::size_t>(n));
         continue;
       }
       if (n == 0 || (n < 0 && errno != EINTR)) {
@@ -468,6 +709,21 @@ void Supervisor::drainSupervisorSocket() {
       }
     }
     close(clientFd);
+
+    std::size_t start = 0;
+    while (start < pending.size()) {
+      const std::size_t nl = pending.find('\n', start);
+      const std::string line = pending.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+      int workerId = -1;
+      long long busyMs = 0;
+      if (parseHeartbeat(line, workerId, busyMs)) {
+        recordHeartbeat(workerId, busyMs);
+      }
+      if (nl == std::string::npos) {
+        break;
+      }
+      start = nl + 1;
+    }
   }
 }
 
@@ -487,8 +743,12 @@ void Supervisor::writeModelConfig() const {
     return;
   }
   out << "{\"modelPath\":\"" << jsonEscape(config_.modelPath) << "\",\"shmName\":\""
-      << jsonEscape(config_.shmName) << "\",\"workerCount\":" << config_.workerCount
-      << ",\"pollIntervalMs\":" << config_.pollIntervalMs << "}\n";
+      << jsonEscape(config_.shmName) << "\",\"workerCount\":" << effectiveWorkerCount_
+      << ",\"configuredWorkerCount\":" << config_.workerCount
+      << ",\"pollIntervalMs\":" << config_.pollIntervalMs
+      << ",\"hardware\":" << hardwareReportToJson(hardware_)
+      << ",\"capacity\":" << capacityPlanToJson(plan_)
+      << ",\"assignments\":" << workerAssignmentsToJson(assignments_) << "}\n";
 }
 
 bool Supervisor::crashLimitOpenFromDisk(const ProcessInfo& info) const {
@@ -550,17 +810,11 @@ bool Supervisor::notifyApiServerWorkerCrash(int workerId) const {
   return notifyApiServer("worker_crashed", workerId);
 }
 
-// The api-server needs to hear that a replacement exists. Its worker pool stops
-// probing after EDGE_WORKER_RECOVERY_ATTEMPTS tries. Without this message, a
-// worker that took longer than that to come back would stay out of the pool for
-// the rest of the process.
+// Without this the api-server's pool gives up probing and never takes the worker back.
 bool Supervisor::notifyApiServerWorkerRestarted(int workerId) const {
   return notifyApiServer("worker_restarted", workerId);
 }
 
-// The pidfile registry. A child that is running has a file here, and a child
-// that died does not, so the dashboard can list what is up without asking any
-// process anything.
 std::string Supervisor::pidFileNameFor(const ProcessInfo& info) {
   switch (info.type) {
     case ProcessType::kModelCache:

@@ -2,12 +2,19 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <sys/types.h>
+
+#include "../hardware/capacityPlan.h"
+#include "../hardware/hardwareReport.h"
+#include "../ipc/exitCodes.h"
+#include "workerLiveness.h"
 
 enum class ProcessType {
   kModelCache,
@@ -37,6 +44,11 @@ struct SupervisorConfig {
   std::string workerBinary = "edge-inference-worker";
   std::string apiBinary = "node";
   std::string apiEntry = "api-server/server.js";
+
+  CapacityLimits capacity;
+  std::string meminfoPath = "/proc/meminfo";
+  int hardwareProbeTimeoutMs = 10000;
+  LivenessLimits liveness;
 };
 
 class CircuitBreaker {
@@ -62,6 +74,10 @@ class Supervisor {
   void requestStop();
 
  private:
+  // A child, because enumerating devices costs a CUDA primary context nothing can give back.
+  HardwareReport runHardwareProbeChild() const;
+  void discoverHardware();
+
   bool setupSupervisorSocket();
   bool startModelCache();
   bool waitForModelReady() const;
@@ -69,13 +85,18 @@ class Supervisor {
   bool startWorkers();
   bool startWorker(int workerId);
 
-  pid_t forkExec(const std::vector<std::string>& args) const;
+  pid_t forkExec(const std::vector<std::string>& args,
+                 const std::vector<std::pair<std::string, std::string>>& env = {}) const;
+  const WorkerAssignment* assignmentFor(int workerId) const;
+  bool handleWorkerReassignment(const ProcessInfo& info, int status);
   void reapChildren();
   void handleCrash(pid_t pid, int status);
   void shutdownChildren();
   void restartWorkersAfterModelCacheRestart();
   void cleanupSocket();
   void drainSupervisorSocket();
+  void checkWorkerLiveness();
+  void recordHeartbeat(int workerId, long long busyMs);
 
   void writeCrashLog(const ProcessInfo& info, int status, const std::string& reason) const;
   void writeModelConfig() const;
@@ -93,10 +114,18 @@ class Supervisor {
   static std::string statusToReason(int status);
 
   SupervisorConfig config_;
+  HardwareReport hardware_;
+  CapacityPlan plan_;
+  std::vector<WorkerAssignment> assignments_;
+  int effectiveWorkerCount_ = 0;
+  // Regenerated on every model-cache start, so a restart cannot be satisfied by the flag the
+  // previous cache left behind.
+  std::uint64_t runNonce_ = 0;
   std::atomic<bool> running_{false};
   int supervisorServerFd_ = -1;
   CircuitBreaker circuitBreaker_;
 
   std::unordered_map<pid_t, ProcessInfo> processesByPid_;
   std::unordered_map<int, pid_t> workerPidById_;
+  std::unordered_map<int, WorkerHealth> workerHealthById_;
 };

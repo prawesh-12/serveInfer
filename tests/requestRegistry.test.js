@@ -17,8 +17,7 @@ function newInflightPath() {
   return path.join(dir, 'inflight.json');
 }
 
-// The registry writes to a temp file and then renames it. Both steps are async.
-// So a reader has to wait for the rename, not read the moment a call returns.
+// Write-then-rename is async, so a reader must wait for the rename, not for the call to return.
 async function readInflight(inflightPath) {
   return waitFor(() => {
     try {
@@ -190,7 +189,6 @@ test('a fresh registry reports what the previous process left in flight as orpha
     return parsed.inflight.length === 1;
   });
 
-  // No settle and no clean shutdown: exactly what a crash leaves behind.
   const second = new RequestRegistry({ inflightPath, idempotencyTtlMs: 60_000 });
   assert.equal(second.orphans.length, 1);
   assert.equal(second.orphans[0].requestId, 'never-finished');
@@ -233,9 +231,6 @@ test('lookup reports new, then inflight, then completed with the result attached
 });
 
 test('overlapping writes still publish valid JSON, not a mix of two payloads', async () => {
-  // Every write used to go to the same .tmp path. Two writes at once meant two
-  // renames, and the published file could end up a mix of both. readInflightFile
-  // then fails to parse it and reports no orphans, without saying anything.
   const inflightPath = newInflightPath();
   const registry = new RequestRegistry({ inflightPath, idempotencyTtlMs: 60_000 });
   const jobs = [];
@@ -249,8 +244,6 @@ test('overlapping writes still publish valid JSON, not a mix of two payloads', a
     );
   }
   await Promise.all(jobs);
-  // Writes are async and serialised, so the file may not exist yet on the first
-  // look. Tolerate that rather than racing it.
   await waitFor(() => {
     try {
       return JSON.parse(fs.readFileSync(inflightPath, 'utf8')).inflight.length === 0;
@@ -262,9 +255,6 @@ test('overlapping writes still publish valid JSON, not a mix of two payloads', a
   const parsed = JSON.parse(fs.readFileSync(inflightPath, 'utf8'));
   assert.deepEqual(parsed.inflight, []);
 
-  // Writes are serialised, so the last one can still be renaming when the
-  // published file already reads as empty. Wait for the steady state rather than
-  // asserting on a moment mid-write.
   const dir = path.dirname(inflightPath);
   const base = path.basename(inflightPath);
   const leftovers = () =>

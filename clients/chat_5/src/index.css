@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/* The components live in a workspace package, which Tailwind skips unless it is named. */
+@source "../../shared/src";
+
+body {
+  background: #fff;
+}

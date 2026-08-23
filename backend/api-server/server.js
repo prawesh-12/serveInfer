@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const express = require('express');
-const { numberEnv, requiredEnv } = require('../config/env');
+const { loadEnv, numberEnv, requiredEnv } = require('../config/env');
 const { WorkerPool } = require('./ipc');
+const { resolveWorkerCount, logWorkerCountDecision } = require('./workerCountSource');
 const { registerInferRoutes, registry } = require('./routes/infer');
 
 const LOG_LEVELS = {
@@ -107,7 +108,6 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
           fs.unlinkSync(socketPath);
         }
       } catch {
-        // no-op
       }
     });
   };
@@ -119,14 +119,22 @@ function startSupervisorIpcListener(socketPath, workerPool, logger) {
 
 const args = parseArgs(process.argv);
 const port = Number(args.port || numberEnv('EDGE_API_PORT'));
-const workerCount = numberEnv('EDGE_WORKER_COUNT');
+loadEnv();
+const workerCountDecision = resolveWorkerCount({
+  configuredCount: numberEnv('EDGE_WORKER_COUNT'),
+  modelConfigPath: args['model-config'] || process.env.EDGE_MODEL_CONFIG_PATH || null,
+});
+const workerCount = workerCountDecision.workerCount;
 const workerSocketPrefix = requiredEnv('EDGE_WORKER_SOCKET_PREFIX');
 const workerConnectTimeoutMs = numberEnv('EDGE_WORKER_CONNECT_TIMEOUT_MS');
 const workerRecoveryMs = numberEnv('EDGE_WORKER_RECOVERY_MS');
 const workerRecoveryAttempts = numberEnv('EDGE_WORKER_RECOVERY_ATTEMPTS');
+const workerStartupGraceMs = numberEnv('EDGE_WORKER_STARTUP_GRACE_MS');
 const supervisorSocketPath =
   args['supervisor-socket'] || requiredEnv('EDGE_API_NOTIFY_SOCK');
 const logger = createLogger(requiredEnv('EDGE_LOG_LEVEL'));
+
+logWorkerCountDecision(logger, workerCountDecision);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -137,6 +145,7 @@ const workerPool = new WorkerPool({
   connectTimeoutMs: workerConnectTimeoutMs,
   recoveryMs: workerRecoveryMs,
   recoveryAttempts: workerRecoveryAttempts,
+  startupGraceMs: workerStartupGraceMs,
 });
 
 registerInferRoutes(app, workerPool);
@@ -145,7 +154,13 @@ app.get('/health', (_req, res) => {
   const health = workerPool.getHealth();
   const requests = registry.snapshot();
   res.json({
-    workers: health.workers.map((w) => ({ id: w.id, status: w.status })),
+    workers: health.workers.map((w) => ({
+      id: w.id,
+      status: w.status,
+      device: w.device,
+      degraded: w.degraded,
+      degradedReason: w.degradedReason,
+    })),
     activeSlots: health.activeSlots,
     uptime: Math.floor(health.uptimeMs / 1000),
     requests: {

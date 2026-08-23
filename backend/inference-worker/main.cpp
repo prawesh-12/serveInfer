@@ -1,6 +1,8 @@
 #include "worker.h"
 
 #include "../ipc/paths.h"
+#include "gpuResourceOwner.h"
+#include "hardwareProbe.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -53,6 +55,15 @@ bool parseFloatArg(const std::string& raw, float& out) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Must stay short-lived: enumerating ggml devices pins a CUDA primary context.
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--probe-hardware") {
+      const char* meminfo = std::getenv("EDGE_MEMINFO_PATH");
+      return runHardwareProbe(meminfo != nullptr && meminfo[0] != '\0' ? meminfo
+                                                                       : "/proc/meminfo");
+    }
+  }
+
   WorkerConfig config;
   config.workerId = 0;
   config.socketPath = EdgeIPC::workerSock(config.workerId);
@@ -79,6 +90,13 @@ int main(int argc, char** argv) {
   if (const char* forceCpu = std::getenv("EDGE_FORCE_CPU")) {
     config.forceCpu = std::string(forceCpu) == "1";
   }
+
+  // CUDA_VISIBLE_DEVICES is the actual decision; this only makes logs and the ladder agree.
+  if (const char* backend = std::getenv("EDGE_WORKER_BACKEND")) {
+    config.assignedBackend = backend;
+  }
+  config.reexecAfterDeviceClassFallback =
+      deviceFallbackModeIsReexec(std::getenv("EDGE_DEVICE_FALLBACK_MODE"));
 
   if (const char* ladder = std::getenv("EDGE_DEVICE_LADDER")) {
     config.deviceLadder = parseDeviceLadder(ladder);

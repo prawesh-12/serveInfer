@@ -6,8 +6,7 @@ const assert = require('node:assert/strict');
 const { Scheduler } = require('../backend/shell-app/scheduler');
 const { deferred, sleep, waitFor, abortableJob } = require('./support');
 
-// Fast timers everywhere. The defaults are measured in seconds and minutes,
-// which no test should ever wait out.
+// Fast timers everywhere: the real defaults are seconds and minutes.
 function makeScheduler(overrides = {}) {
   return new Scheduler({
     maxSlots: 1,
@@ -93,8 +92,7 @@ test('a low priority job that has aged long enough overtakes a newer normal job'
     },
   });
 
-  // Backdating beats sleeping for a second. Low needs 100 aging intervals more
-  // than the normal job has, so with agingMs=10 that is just over a second.
+  // Low needs 100 aging intervals more than the normal job, which at agingMs=10 is over a second.
   const lowJob = scheduler.queue.find((job) => job.requestId === 'low-waiter');
   lowJob.createdAt -= 1100;
 
@@ -262,9 +260,6 @@ test('a running job that honours its abort signal is killed by the execution tim
 });
 
 test('the execution timeout reclaims the slot even when the job ignores its abort signal', async () => {
-  // The timeout releases the slot itself rather than waiting on the job's own
-  // promise chain. A job that never settles is exactly what this timeout is for,
-  // so waiting for it to settle would defeat the purpose.
   const scheduler = makeScheduler({ execTimeoutMs: 20 });
   const events = [];
 
@@ -283,7 +278,6 @@ test('the execution timeout reclaims the slot even when the job ignores its abor
   assert.equal(scheduler.active.size, 0, 'the slot is released');
   assert.equal(scheduler.getQueueStatus('deaf').state, 'timeout');
 
-  // and the reclaimed slot actually takes new work
   const next = await scheduler.enqueue({
     requestId: 'next',
     mfeId: 'doc-qa',

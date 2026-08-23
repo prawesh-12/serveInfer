@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <algorithm>
 #include <cerrno>
@@ -41,7 +42,8 @@ bool ModelCache::initialize() {
     return false;
   }
 
-  std::cerr << "[model-cache] ready, shared memory: " << config_.shmName << '\n';
+  std::cerr << "[model-cache] ready, shared memory: " << config_.shmName
+            << " runNonce=" << config_.runNonce << '\n';
   return true;
 }
 
@@ -88,29 +90,10 @@ bool ModelCache::openModelFile(std::size_t& modelSize) {
   return true;
 }
 
+// The metadata is claimed and stamped before the weights segment is touched, so the window in
+// which a previous run's header is still on display is as short as this process can make it.
+// The nonce is what actually closes it; this ordering just keeps the window from being seconds long.
 bool ModelCache::createSharedMemory(std::size_t modelSize) {
-  shmFd_ = shm_open(config_.shmName.c_str(), O_CREAT | O_RDWR, 0666);
-  if (shmFd_ < 0) {
-    std::cerr << "[model-cache] shm_open failed for " << config_.shmName << ": " << std::strerror(errno)
-              << '\n';
-    return false;
-  }
-
-  if (ftruncate(shmFd_, static_cast<off_t>(modelSize)) != 0) {
-    std::cerr << "[model-cache] ftruncate failed: " << std::strerror(errno) << '\n';
-    return false;
-  }
-
-  shmBase_ = mmap(nullptr, modelSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
-  if (shmBase_ == MAP_FAILED) {
-    shmBase_ = nullptr;
-    std::cerr << "[model-cache] mmap failed: " << std::strerror(errno) << '\n';
-    return false;
-  }
-
-  shmSize_ = modelSize;
-  std::memset(shmBase_, 0, shmSize_);
-
   const std::string metaName = EdgeIPC::shmMetaName(config_.shmName);
   metaFd_ = shm_open(metaName.c_str(), O_CREAT | O_RDWR, 0666);
   if (metaFd_ < 0) {
@@ -132,17 +115,45 @@ bool ModelCache::createSharedMemory(std::size_t modelSize) {
   }
 
   metaSize_ = kHeaderSize;
-  std::memset(metaBase_, 0, metaSize_);
+  claimHeader();
+
+  shmFd_ = shm_open(config_.shmName.c_str(), O_CREAT | O_RDWR, 0666);
+  if (shmFd_ < 0) {
+    std::cerr << "[model-cache] shm_open failed for " << config_.shmName << ": " << std::strerror(errno)
+              << '\n';
+    return false;
+  }
+
+  if (ftruncate(shmFd_, static_cast<off_t>(modelSize)) != 0) {
+    std::cerr << "[model-cache] ftruncate failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  shmBase_ = mmap(nullptr, modelSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
+  if (shmBase_ == MAP_FAILED) {
+    shmBase_ = nullptr;
+    std::cerr << "[model-cache] mmap failed: " << std::strerror(errno) << '\n';
+    return false;
+  }
+
+  shmSize_ = modelSize;
+  std::memset(shmBase_, 0, shmSize_);
   return true;
+}
+
+void ModelCache::claimHeader() {
+  auto* header = reinterpret_cast<SharedModelHeader*>(metaBase_);
+  std::memset(header, 0, sizeof(SharedModelHeader));
+  std::memcpy(header->magic, "EDGE", 4);
+  header->version = kSharedModelHeaderVersion;
+  header->runNonce = config_.runNonce;
+  header->ready = 0;
+  std::atomic_thread_fence(std::memory_order_release);
 }
 
 bool ModelCache::loadModelIntoSharedMemory(std::size_t modelSize) {
   auto* header = reinterpret_cast<SharedModelHeader*>(metaBase_);
-  std::memset(header, 0, sizeof(SharedModelHeader));
-  std::memcpy(header->magic, "EDGE", 4);
-  header->version = 1;
   header->modelSize = static_cast<std::uint64_t>(modelSize);
-  header->ready = 0;
 
   auto* weights = reinterpret_cast<std::uint8_t*>(shmBase_);
   std::vector<char> buffer(1 << 20);
@@ -173,6 +184,8 @@ bool ModelCache::loadModelIntoSharedMemory(std::size_t modelSize) {
   header->loadedAt = std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
+  // Ready is the last write and needs a fence, or a reader can see the flag before the bytes.
+  std::atomic_thread_fence(std::memory_order_release);
   header->ready = 1;
 
   if (msync(shmBase_, shmSize_, MS_SYNC) != 0) {

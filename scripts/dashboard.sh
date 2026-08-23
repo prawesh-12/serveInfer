@@ -1,6 +1,4 @@
 #!/bin/bash
-# The operator view. Reads the pidfile registry in $EDGE_STATE_DIR and the two
-# health endpoints, so it runs on the same host but starts and stops on its own.
 set -euo pipefail
 
 TIER=dashboard
@@ -18,7 +16,7 @@ fi
 
 require_env EDGE_STATE_DIR EDGE_STATUS_DASHBOARD_PORT EDGE_SHELL_PUBLIC_BASE EDGE_API_BASE
 require_free_port "$EDGE_STATUS_DASHBOARD_PORT" "dashboard"
-mkdir -p "$EDGE_STATE_DIR"
+mkdir -p "$EDGE_STATE_DIR" "$EDGE_LOG_DIR"
 
 ENTRY="$ROOT/dashboard/server.js"
 [[ -f "$ENTRY" ]] || { echo "[dashboard] missing entry file: $ENTRY" >&2; exit 1; }

@@ -9,9 +9,7 @@
 
 namespace {
 
-// cpu is the only tier that passes its probe on every machine. So a test that
-// needs two usable tiers just names cpu twice. The ladder does not remove
-// duplicates. This keeps the escalation tests working with or without a GPU.
+// The ladder does not deduplicate, so a test needing two usable tiers names cpu twice.
 std::vector<std::string> twoUsableTiers() {
   return {"cpu", "cpu"};
 }
@@ -24,7 +22,6 @@ void sleepMs(int ms) {
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
-// A small JSON reader, just enough to prove toJson emits valid output.
 // Returns the index after the value it read, or npos if the text is not JSON.
 std::size_t skipValue(const std::string& text, std::size_t i);
 
@@ -187,7 +184,6 @@ EDGE_TEST(baseline_is_not_degraded,
   CHECK(!ladder.degraded());
   CHECK(ladder.degradedReason().empty());
 
-  // Selecting again must not move the baseline underneath us.
   CHECK(ladder.select());
   CHECK(!ladder.degraded());
 }
@@ -226,7 +222,6 @@ EDGE_TEST(quarantined_tier_returns_after_the_window,
   CHECK_EQ(ladder.activeIndex(), std::size_t{1});
   CHECK(ladder.degraded());
 
-  // Still inside the window: the tier is not allowed back yet.
   CHECK(ladder.select());
   CHECK_EQ(ladder.activeIndex(), std::size_t{1});
 

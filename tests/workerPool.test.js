@@ -9,8 +9,7 @@ const { spawn } = require('node:child_process');
 const { WorkerPool } = require('../backend/api-server/ipc');
 const { sleep, waitFor } = require('./support');
 
-// An AF_UNIX path has to fit in 108 bytes, so these stay in /tmp with short
-// names rather than under a long temp directory.
+// An AF_UNIX path must fit in 108 bytes, so these stay in /tmp with short names.
 let counter = 0;
 const socketPaths = [];
 const pools = [];
@@ -67,8 +66,6 @@ test('probing a worker fails for a stale socket file that nothing is listening o
   const pool = makePool();
   const socketPath = pool.workers.get(0).socketPath;
 
-  // A killed process leaves its socket inode behind. That leftover file is the
-  // exact thing that used to fool the old bare-timer recovery.
   const child = spawn(
     process.execPath,
     [
@@ -174,9 +171,6 @@ test('a healthy worker whose socket exists is handed out by _acquireWorker', asy
 });
 
 test('a supervisor worker_restarted message re-arms the probe instead of trusting the claim', async () => {
-  // The supervisor has started a replacement, but its socket is not there yet.
-  // Trusting the message alone would hand out a worker that cannot take a
-  // connection.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   pool._markWorkerCrashed(0, null);
   await waitFor(() => pool.workers.get(0).recoveryAttempt >= 2);
@@ -185,16 +179,12 @@ test('a supervisor worker_restarted message re-arms the probe instead of trustin
   assert.equal(pool.workers.get(0).status, 'crashed', 'still crashed until a probe says otherwise');
   assert.equal(pool.workers.get(0).recoveryAttempt, 1, 'the attempt budget is reset');
 
-  // once something is actually listening, the probe lets it back in
   await listenOn(pool.workers.get(0).socketPath);
   pool.handleSupervisorMessage({ type: 'worker_restarted', workerId: 0 });
   await waitFor(() => pool.workers.get(0).status === 'ready');
 });
 
 test('a worker whose socket file is stale is quarantined after its first failed request', async () => {
-  // _refreshWorkerReadiness marks a worker ready if its socket file exists, and
-  // a leftover file passes that check. The first failed request proves the file
-  // was lying. The worker goes out then, instead of being handed out again.
   const pool = makePool({ recoveryMs: 10, recoveryAttempts: 2 });
   const socketPath = pool.workers.get(0).socketPath;
   fs.writeFileSync(socketPath, '');
@@ -214,9 +204,77 @@ test('isTransportFailure separates a dead socket from a worker that answered wit
   assert.ok(WorkerPool.isTransportFailure('worker_connect_timeout'));
   assert.ok(WorkerPool.isTransportFailure('worker_socket_error'));
   assert.ok(WorkerPool.isTransportFailure('worker_closed'));
-  // these came back over a working socket, so the worker is not the problem
   assert.ok(!WorkerPool.isTransportFailure('worker_error'));
   assert.ok(!WorkerPool.isTransportFailure('worker_bad_json'));
   assert.ok(!WorkerPool.isTransportFailure('no_ready_workers'));
   assert.ok(!WorkerPool.isTransportFailure(undefined));
+});
+
+test('a worker whose socket never appears stops reading as starting once the grace is up', async () => {
+  const pool = makePool({ startupGraceMs: 30 });
+  const worker = pool.workers.get(0);
+  assert.equal(worker.status, 'starting');
+
+  await sleep(40);
+  pool._refreshWorkerReadiness();
+
+  assert.equal(worker.status, 'crashed');
+  assert.equal(worker.recoveryAttempt, 1);
+});
+
+test('a worker still inside its grace window is left alone', () => {
+  const pool = makePool({ startupGraceMs: 10000 });
+  pool._refreshWorkerReadiness();
+  assert.equal(pool.workers.get(0).status, 'starting');
+});
+
+test('getHealth reports the failed worker without a request having been made', async () => {
+  const pool = makePool({ startupGraceMs: 30 });
+  assert.equal(pool.getHealth().workers[0].status, 'starting');
+
+  await sleep(40);
+
+  assert.equal(pool.getHealth().workers[0].status, 'crashed');
+});
+
+test('a worker that binds inside the grace window becomes ready and keeps its clock', async () => {
+  const pool = makePool({ startupGraceMs: 60 });
+  const worker = pool.workers.get(0);
+  await listenOn(worker.socketPath);
+
+  pool._refreshWorkerReadiness();
+  assert.equal(worker.status, 'ready');
+
+  await sleep(70);
+  pool._refreshWorkerReadiness();
+  assert.equal(worker.status, 'ready');
+});
+
+test('the grace clock restarts for the replacement a supervisor announces', async () => {
+  const pool = makePool({ startupGraceMs: 60, recoveryMs: 10000 });
+  const worker = pool.workers.get(0);
+  await sleep(40);
+
+  pool.handleSupervisorMessage({ type: 'worker_restarted', workerId: 0 });
+  assert.equal(worker.status, 'crashed');
+
+  clearTimeout(worker.recoveryTimer);
+  worker.recoveryTimer = null;
+  worker.status = 'starting';
+  pool._refreshWorkerReadiness();
+
+  assert.equal(worker.status, 'starting');
+});
+
+test('a pool cannot be built with a startup grace that never expires', () => {
+  assert.throws(
+    () =>
+      new WorkerPool({
+        workerCount: 1,
+        workerSocketPrefix: '/tmp/edge-grace-',
+        connectTimeoutMs: 50,
+        startupGraceMs: 0,
+      }),
+    /positive startupGraceMs/
+  );
 });
